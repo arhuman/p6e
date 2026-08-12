@@ -118,6 +118,31 @@ composition (no measured gain, loses step boundaries), and a raw typed function
 chain (the floor, but it forces every node in a pipeline to share one input and
 output type, so it is not an engine).
 
+## Addendum: what the port actually cost
+
+Measured on `internal/node` after porting, same machine, one adapter call
+through the `RuntimeNode` interface, zero allocations throughout:
+
+| Version | ns/call |
+|---|---|
+| First working port | 25.4 |
+| ExecutionContext passed by pointer | 15.3 |
+| Descriptor by pointer, error paths only | (included above) |
+
+Two findings worth keeping, because both were invisible until measured and both
+cost more than the type assertion the whole ADR is about:
+
+- **Passing `ExecutionContext` by value cost 16ns per edge.** It is three
+  strings and an int, 56 bytes, copied on every call. Nodes now receive
+  `*ExecutionContext` and treat it as read-only.
+- **Passing `Descriptor` by value to the arity and type checks cost 8ns per
+  edge**, for 72 bytes copied on a path that only reads a name when something
+  has already gone wrong. The checks are inlined into `Execute` and the
+  descriptor reaches the error builders by pointer.
+
+The lesson generalizes: on a path this short, struct copies dominate. Anything
+wider than a word that crosses the adapter should cross it by pointer.
+
 ## References
 
 - Handoff sections 28 to 30 (the architectural question, the adapter sketch, the
