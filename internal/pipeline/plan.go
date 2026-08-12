@@ -16,6 +16,10 @@ type CompiledStep struct {
 	Deps []int
 	// Dependents holds the indices of steps waiting on this one.
 	Dependents []int
+	// InputOffset is where this step's inputs live in the execution's single
+	// input buffer. Laying the buffer out here means a run allocates one slice
+	// for all inputs instead of one per step.
+	InputOffset int
 	// Retry is the workflow's policy for this step.
 	Retry Retry
 }
@@ -30,6 +34,9 @@ type ExecutionPlan struct {
 	// Roots are the indices of steps with no dependencies: where execution
 	// starts.
 	Roots []int
+	// TotalInputs is the size of the input buffer an execution needs, the sum
+	// of every step's arity.
+	TotalInputs int
 }
 
 // Len reports the number of steps.

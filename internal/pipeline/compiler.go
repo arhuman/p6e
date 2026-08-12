@@ -216,11 +216,13 @@ func (c *compiler) plan(name string) *ExecutionPlan {
 			deps[port] = c.index[dep]
 		}
 		p.Steps[i] = CompiledStep{
-			ID:    id,
-			Node:  c.nodes[i],
-			Deps:  deps,
-			Retry: step.RetryPolicy(),
+			ID:          id,
+			Node:        c.nodes[i],
+			Deps:        deps,
+			InputOffset: p.TotalInputs,
+			Retry:       step.RetryPolicy(),
 		}
+		p.TotalInputs += len(deps)
 		if len(deps) == 0 {
 			p.Roots = append(p.Roots, i)
 		}
