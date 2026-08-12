@@ -12,12 +12,34 @@ import (
 	"github.com/arhuman/p6e/internal/pipeline"
 )
 
+// DefaultMaxConcurrency bounds how many steps run at once when Options does not
+// say. It is high enough that a realistic pipeline never notices and low enough
+// that a wide fan-out cannot exhaust the process: a 10,000-way fan-out across
+// several concurrent executions would otherwise create goroutines without limit.
+const DefaultMaxConcurrency = 256
+
+// DefaultAbandonAfter bounds how long Run waits for steps that are still
+// running once the execution is winding down, whether because a step failed or
+// because the caller's context ended.
+//
+// It exists because Go cannot stop a goroutine. A node that ignores its context
+// would otherwise block Run forever, and no deadline the caller supplied could
+// rescue it.
+const DefaultAbandonAfter = 5 * time.Second
+
 // Options configures one run. Everything is optional.
 type Options struct {
 	// WorkflowID identifies the pipeline. Defaults to the plan's name.
 	WorkflowID string
 	// ExecutionID identifies this run. Defaults to a generated value.
 	ExecutionID string
+	// MaxConcurrency caps how many steps execute at once. Zero selects
+	// DefaultMaxConcurrency. One makes execution sequential.
+	MaxConcurrency int
+	// AbandonAfter caps how long Run waits for steps still running after the
+	// execution has failed or been cancelled. Zero selects
+	// DefaultAbandonAfter.
+	AbandonAfter time.Duration
 }
 
 var executionCounter atomic.Uint64
@@ -30,6 +52,18 @@ var executionCounter atomic.Uint64
 //
 // Run does not return an error. A pipeline that fails is a normal outcome
 // described by the Execution, not an exception. Check Execution.Failed.
+//
+// Timing guarantees, which exist because a node that ignores its context cannot
+// be stopped:
+//
+//   - Once ctx is done, Run returns within AbandonAfter.
+//   - Once a step has failed, Run returns within AbandonAfter.
+//   - Otherwise Run waits, because a step that is merely slow is
+//     indistinguishable from one that is stuck.
+//
+// Steps still running when Run gives up are reported as cancelled and counted
+// in Execution.Abandoned. Their goroutines are left behind: that is the cost of
+// not being able to kill them, and it is preferable to wedging the caller.
 func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execution {
 	ex := &Execution{
 		ID:         defaultString(opts.ExecutionID, generateExecutionID),
@@ -48,6 +82,14 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 	if workflowID == "" {
 		workflowID = plan.Name
 	}
+	maxConcurrency := opts.MaxConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = DefaultMaxConcurrency
+	}
+	abandonAfter := opts.AbandonAfter
+	if abandonAfter <= 0 {
+		abandonAfter = DefaultAbandonAfter
+	}
 
 	// Cancelling on the first failure stops work that can no longer matter.
 	runCtx, cancel := context.WithCancel(ctx)
@@ -65,7 +107,13 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 		unmet[i] = len(plan.Steps[i].Deps)
 	}
 
+	// The send never blocks: the channel holds every step's completion, so an
+	// abandoned goroutine that finishes later cannot leak on the send.
 	done := make(chan completion, len(plan.Steps))
+	// Steps whose dependencies are met, waiting for a concurrency slot. The
+	// cursor avoids reslicing, so this allocates once.
+	ready := make([]int, 0, len(plan.Steps))
+	launched := 0
 	inflight := 0
 	stopped := false
 
@@ -90,45 +138,85 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 		}()
 	}
 
-	for _, root := range plan.Roots {
-		launch(root)
+	// pump starts as much ready work as the concurrency cap allows.
+	pump := func() {
+		for launched < len(ready) && inflight < maxConcurrency {
+			launch(ready[launched])
+			launched++
+		}
 	}
 
-	for inflight > 0 {
-		c := <-done
-		inflight--
+	// abandonTimer is armed only once the execution is winding down, so a
+	// healthy long-running pipeline is never cut short.
+	var abandonTimer *time.Timer
+	var abandon <-chan time.Time
+	windDown := func() {
+		cancel()
+		if abandonTimer == nil {
+			abandonTimer = time.NewTimer(abandonAfter)
+			abandon = abandonTimer.C
+		}
+	}
+	defer func() {
+		if abandonTimer != nil {
+			abandonTimer.Stop()
+		}
+	}()
 
-		result := &ex.Steps[c.index]
-		result.Meta = c.result.Meta
+	// callerDone is cleared after it fires. A closed channel stays ready, and
+	// selecting on it again would spin.
+	callerDone := ctx.Done()
 
-		if c.result.Err != nil {
-			result.Err = c.result.Err
-			if c.result.Err.Kind == node.KindCancelled {
-				result.State = StateCancelled
-			} else {
-				result.State = StateFailed
-			}
-			if !stopped {
+	ready = append(ready, plan.Roots...)
+	pump()
+
+	abandoned := false
+	for inflight > 0 && !abandoned {
+		select {
+		case c := <-done:
+			inflight--
+			if ex.record(c) && !stopped {
 				stopped = true
 				ex.FailedStep = c.index
-				cancel()
+				windDown()
 			}
-			continue
-		}
-
-		result.State = StateSucceeded
-		result.Value = c.result.Value
-
-		// Steps still in flight are allowed to finish and be recorded, but
-		// nothing new starts once the execution has failed.
-		if stopped {
-			continue
-		}
-		for _, dependent := range plan.Steps[c.index].Dependents {
-			unmet[dependent]--
-			if unmet[dependent] == 0 {
-				launch(dependent)
+			// Steps still in flight are allowed to finish and be recorded, but
+			// nothing new starts once the execution has stopped.
+			if stopped {
+				continue
 			}
+			for _, dependent := range plan.Steps[c.index].Dependents {
+				unmet[dependent]--
+				if unmet[dependent] == 0 {
+					ready = append(ready, dependent)
+				}
+			}
+			pump()
+
+		case <-callerDone:
+			callerDone = nil
+			if !stopped {
+				stopped = true
+				ex.Cancelled = true
+			}
+			windDown()
+
+		case <-abandon:
+			abandoned = true
+		}
+	}
+
+	if abandoned {
+		for i := range ex.Steps {
+			if ex.Steps[i].State == StateRunning {
+				ex.Steps[i].State = StateCancelled
+				ex.Steps[i].Err = node.Errf(node.KindCancelled, "abandoned",
+					"step %q was still running %s after the execution stopped", ex.Steps[i].ID, abandonAfter)
+				ex.Abandoned++
+			}
+		}
+		if !ex.Failed() {
+			ex.Cancelled = true
 		}
 	}
 
@@ -140,6 +228,26 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 		}
 	}
 	return ex
+}
+
+// record stores a completion and reports whether it was a failure.
+func (e *Execution) record(c completion) bool {
+	result := &e.Steps[c.index]
+	result.Meta = c.result.Meta
+
+	if c.result.Err != nil {
+		result.Err = c.result.Err
+		if c.result.Err.Kind == node.KindCancelled {
+			result.State = StateCancelled
+		} else {
+			result.State = StateFailed
+		}
+		return true
+	}
+
+	result.State = StateSucceeded
+	result.Value = c.result.Value
+	return false
 }
 
 type completion struct {

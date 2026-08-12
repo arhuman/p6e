@@ -66,17 +66,29 @@ type Execution struct {
 	Steps []StepResult
 	// FailedStep is the index of the step that failed the execution, or -1.
 	FailedStep int
+	// Cancelled reports that the execution ended because its context was done
+	// rather than because a step failed. A step failure that happens to be a
+	// cancellation still sets FailedStep.
+	Cancelled bool
+	// Abandoned counts steps that were still running when Run gave up waiting.
+	// Their goroutines outlived the execution, which is worth surfacing: a
+	// non-zero value here means some node is ignoring its context.
+	Abandoned int
 }
 
 // Failed reports whether the execution did not complete successfully.
-func (e *Execution) Failed() bool { return e.FailedStep >= 0 }
+func (e *Execution) Failed() bool { return e.FailedStep >= 0 || e.Cancelled }
 
 // Err returns the failure that ended the execution, or nil.
 func (e *Execution) Err() *node.NodeError {
-	if !e.Failed() {
+	switch {
+	case e.FailedStep >= 0:
+		return e.Steps[e.FailedStep].Err
+	case e.Cancelled:
+		return node.Errf(node.KindCancelled, "cancelled", "execution %q was cancelled", e.ID)
+	default:
 		return nil
 	}
-	return e.Steps[e.FailedStep].Err
 }
 
 // Result returns a step's result by ID.
