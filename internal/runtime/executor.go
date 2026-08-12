@@ -40,6 +40,11 @@ type Options struct {
 	// execution has failed or been cancelled. Zero selects
 	// DefaultAbandonAfter.
 	AbandonAfter time.Duration
+	// DetectMutation checks, at the cost of rendering every step's output
+	// twice, whether any node mutated a value it did not own. Violations land
+	// in Execution.Mutations. This is a debugging facility, far too expensive
+	// to leave on in production.
+	DetectMutation bool
 }
 
 var executionCounter atomic.Uint64
@@ -167,6 +172,8 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 	// selecting on it again would spin.
 	callerDone := ctx.Done()
 
+	guard := newMutationGuard(opts.DetectMutation, len(plan.Steps))
+
 	ready = append(ready, plan.Roots...)
 	pump()
 
@@ -180,6 +187,7 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 				ex.FailedStep = c.index
 				windDown()
 			}
+			guard.record(c.index, ex.Steps[c.index].Value)
 			// Steps still in flight are allowed to finish and be recorded, but
 			// nothing new starts once the execution has stopped.
 			if stopped {
@@ -227,6 +235,8 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 			ex.Steps[i].State = StateSkipped
 		}
 	}
+
+	ex.Mutations = guard.check(ex)
 	return ex
 }
 

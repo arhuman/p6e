@@ -74,6 +74,13 @@ type Execution struct {
 	// Their goroutines outlived the execution, which is worth surfacing: a
 	// non-zero value here means some node is ignoring its context.
 	Abandoned int
+	// Mutations lists immutability violations, and is populated only when
+	// Options.DetectMutation was set. A non-empty value means some node wrote
+	// through a value it did not own, which corrupts fan-out siblings and
+	// retried attempts. It does not mark the execution failed: the run may well
+	// have produced the right answer this time, which is what makes the bug so
+	// hard to find without this.
+	Mutations []MutationViolation
 }
 
 // Failed reports whether the execution did not complete successfully.

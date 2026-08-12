@@ -198,3 +198,27 @@ func TestHelpIsAvailable(t *testing.T) {
 		}
 	}
 }
+
+func TestRunAcceptsDetectMutation(t *testing.T) {
+	code, stdout, stderr := invoke(t, "run", "--detect-mutation", filepath.Join("..", "..", "examples", "json.yaml"))
+
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "ok:") {
+		t.Errorf("a clean pipeline should still report success:\n%s", stdout)
+	}
+}
+
+// The flag order must not matter, and an unrecognized option is a usage error
+// rather than a filename.
+func TestRunOptionHandling(t *testing.T) {
+	example := filepath.Join("..", "..", "examples", "json.yaml")
+
+	if code, _, _ := invoke(t, "run", example, "--detect-mutation"); code != exitOK {
+		t.Errorf("trailing option: exit %d, want %d", code, exitOK)
+	}
+	if code, _, stderr := invoke(t, "run", "--nope", example); code != exitUsage {
+		t.Errorf("unknown option: exit %d, want %d (stderr: %s)", code, exitUsage, stderr)
+	}
+}

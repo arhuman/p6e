@@ -148,6 +148,22 @@ cost more than the type assertion the whole ADR is about:
 The lesson generalizes: on a path this short, struct copies dominate. Anything
 wider than a word that crosses the adapter should cross it by pointer.
 
+## Addendum: convention-only immutability also makes retry unsound
+
+The Negative section above notes that pointer payloads make immutability a
+convention. It stops short of one consequence, added here because a review found
+it and it belongs with the decision that caused it.
+
+`runStep` passes the same input to every retry attempt. A node that partially
+mutates its input before failing therefore retries against its own corrupted
+data. So the convention does not only protect fan-out siblings: `Retryable` is
+sound only for nodes that honour it. A node that mutates its input has a retry
+policy that silently means something other than "try again".
+
+ADR 0006 addresses both this and fan-out corruption by making violations
+detectable, having rejected prevention as unavailable in Go at an acceptable
+cost.
+
 ## References
 
 - Handoff sections 28 to 30 (the architectural question, the adapter sketch, the

@@ -30,6 +30,10 @@ Usage:
   p6e check <pipeline.yaml>   compile and validate without running
   p6e run   <pipeline.yaml>   compile, then execute
   p6e nodes                   list the available node capabilities
+
+Options for run:
+  --detect-mutation           report nodes that mutate a value they do not own.
+                              Expensive: for debugging, not production.
 `
 
 // Exit codes, so a caller can tell a broken pipeline from a broken invocation.
@@ -55,8 +59,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return checkCommand(path, stdout, stderr)
 		})
 	case "run":
-		return withFile(args, stderr, func(path string) int {
-			return runCommand(ctx, path, stdout, stderr)
+		files, detectMutation, unknown := splitRunArgs(args[1:])
+		if unknown != "" {
+			fmt.Fprintf(stderr, "unknown option %q\n\n%s", unknown, usage)
+			return exitUsage
+		}
+		return withFile(append(args[:1], files...), stderr, func(path string) int {
+			return runCommand(ctx, path, stdout, stderr, detectMutation)
 		})
 	case "nodes":
 		for _, name := range nodes.Registry().Names() {
@@ -70,6 +79,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return exitUsage
 	}
+}
+
+// splitRunArgs separates run's options from its file argument. It is a hand
+// rolled two-option parser rather than a flag.FlagSet because the CLI takes the
+// verb first, which the standard package does not model.
+func splitRunArgs(args []string) (files []string, detectMutation bool, unknown string) {
+	for _, arg := range args {
+		switch {
+		case arg == "--detect-mutation":
+			detectMutation = true
+		case strings.HasPrefix(arg, "-"):
+			return nil, false, arg
+		default:
+			files = append(files, arg)
+		}
+	}
+	return files, detectMutation, ""
 }
 
 func withFile(args []string, stderr io.Writer, fn func(path string) int) int {
@@ -89,7 +115,7 @@ func checkCommand(path string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func runCommand(ctx context.Context, path string, stdout, stderr io.Writer) int {
+func runCommand(ctx context.Context, path string, stdout, stderr io.Writer, detectMutation bool) int {
 	plan, code := compile(path, stderr)
 	if plan == nil {
 		return code
@@ -100,10 +126,15 @@ func runCommand(ctx context.Context, path string, stdout, stderr io.Writer) int 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	execution := runtime.Run(ctx, plan, runtime.Options{})
+	execution := runtime.Run(ctx, plan, runtime.Options{DetectMutation: detectMutation})
 	report(execution, stdout, stderr)
 
 	if execution.Failed() {
+		return exitFailure
+	}
+	// A detected mutation means the pipeline produced its answer by breaking a
+	// rule, so it is a failure even though every step reported success.
+	if len(execution.Mutations) > 0 {
 		return exitFailure
 	}
 	return exitOK
@@ -132,12 +163,24 @@ func report(ex *runtime.Execution, stdout, stderr io.Writer) {
 	for _, step := range ex.Steps {
 		fmt.Fprintf(stdout, "  %-9s %-24s %s\n", step.State, step.ID, detail(step))
 	}
-	if ex.Failed() {
+	for _, violation := range ex.Mutations {
+		fmt.Fprintf(stderr, "\nimmutability violation: %s\n", violation)
+	}
+	if ex.Abandoned > 0 {
+		fmt.Fprintf(stderr, "\n%d step(s) were abandoned still running: a node is ignoring its context\n", ex.Abandoned)
+	}
+
+	switch {
+	case ex.FailedStep >= 0:
 		failed := ex.Steps[ex.FailedStep]
 		fmt.Fprintf(stderr, "\nfailed at step %q: %v\n", failed.ID, failed.Err)
-		return
+	case ex.Cancelled:
+		fmt.Fprintf(stderr, "\ncancelled\n")
+	case len(ex.Mutations) > 0:
+		fmt.Fprintf(stderr, "\nevery step succeeded, but the run broke the immutability rule\n")
+	default:
+		fmt.Fprintf(stdout, "\nok: %d steps\n", len(ex.Steps))
 	}
-	fmt.Fprintf(stdout, "\nok: %d steps\n", len(ex.Steps))
 }
 
 func detail(step runtime.StepResult) string {
