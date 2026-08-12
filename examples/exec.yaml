@@ -1,0 +1,25 @@
+# Run a local process.
+#
+# Describing the command and running it are two steps, because the engine does
+# no implicit conversion: exec consumes a Command, so something has to produce
+# one. A future node that builds a command from data would plug in at exactly
+# the same place.
+
+version: 1
+
+steps:
+  greeting:
+    uses: exec.command
+    with:
+      name: /bin/echo
+      args: [hello, from, p6e]
+      timeout: 5s
+
+  run:
+    uses: exec
+    needs: [greeting]
+    # The node reports whether a failure is worth retrying; this decides how
+    # often. A non-zero exit code is not a failure: it arrives as data.
+    retry:
+      max_attempts: 2
+      backoff: 100ms

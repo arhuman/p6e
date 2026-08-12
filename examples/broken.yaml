@@ -1,0 +1,22 @@
+# Deliberately broken: p6e check rejects this before anything runs.
+#
+#   $ p6e check examples/broken.yaml
+#   examples/broken.yaml: step "document": input "in" expects Bytes
+#     but step "payload" produces Text
+#
+# The mistake is one character: type Text where the next step needs Bytes.
+# In an engine that passes untyped documents around, this runs, and fails
+# somewhere else, later, with a worse message.
+
+version: 1
+
+steps:
+  payload:
+    uses: value
+    with:
+      type: Text
+      value: '{"user": "ada"}'
+
+  document:
+    uses: json.decode
+    needs: [payload]

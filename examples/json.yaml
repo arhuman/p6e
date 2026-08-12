@@ -1,0 +1,40 @@
+# Decode a JSON document and ask two questions of it.
+#
+# document fans out to two conditions. They run concurrently and share one
+# decoded document: the engine passes a reference, it does not copy.
+
+version: 1
+
+steps:
+  payload:
+    uses: value
+    with:
+      type: Bytes
+      value: '{"user": {"name": "ada", "active": true}, "count": 3}'
+
+  document:
+    uses: json.decode
+    needs: [payload]
+
+  is_ada:
+    uses: condition
+    needs: [document]
+    with:
+      path: user.name
+      equals: ada
+
+  # JSON decodes every number as a float, and the condition node normalizes
+  # across that, so the integer 3 written here matches the JSON number 3.
+  has_three:
+    uses: condition
+    needs: [document]
+    with:
+      path: count
+      equals: 3
+
+  missing_field_is_false:
+    uses: condition
+    needs: [document]
+    with:
+      path: user.nickname
+      exists: false

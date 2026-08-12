@@ -1,0 +1,46 @@
+# Fetch a URL and decode the response.
+#
+# Four steps for what other engines do in one, on purpose: the graph describes
+# the whole computation. Nothing converts a response into bytes behind your
+# back, so nothing surprises you when it goes wrong.
+#
+# This example reaches the network, so p6e check validates it offline but
+# p6e run needs connectivity.
+
+version: 1
+
+steps:
+  request:
+    uses: http.build
+    with:
+      method: GET
+      url: https://api.github.com/repos/golang/go
+      headers:
+        Accept: application/vnd.github+json
+
+  fetch:
+    uses: http.request
+    needs: [request]
+    with:
+      timeout: 10s
+      max_body_bytes: 1048576
+    # A timeout is transient, so retrying it is reasonable. A 404 is not a
+    # failure at all: it arrives as Response.Status.
+    retry:
+      max_attempts: 3
+      backoff: 200ms
+
+  body:
+    uses: http.body
+    needs: [fetch]
+
+  document:
+    uses: json.decode
+    needs: [body]
+
+  is_public:
+    uses: condition
+    needs: [document]
+    with:
+      path: private
+      equals: false
