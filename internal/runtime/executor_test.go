@@ -12,7 +12,12 @@ import (
 	"github.com/arhuman/p6e/internal/pipeline"
 )
 
-type box struct{ N int }
+type box struct {
+	N int
+	// Data carries a payload large enough for the fan-out benchmark to show
+	// whether the engine copies it.
+	Data []byte
+}
 
 type label struct{ S string }
 
