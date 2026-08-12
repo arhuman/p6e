@@ -279,7 +279,7 @@ input. Go cannot enforce this, so it is checkable instead: `p6e run
 
 ## Node catalogue
 
-Twenty capabilities ship in V0. None produces more than one output.
+Twenty-two capabilities ship in V0. None produces more than one output.
 
 | Capability | Input | Output | Configurable |
 |---|---|---|---|
@@ -290,6 +290,7 @@ Twenty capabilities ship in V0. None produces more than one output.
 | [`json.encode`](#jsonencode) | `JSONDocument` | `Bytes` | rejected |
 | [`json.get`](#jsonget) | `JSONDocument` | `Text`, `Bytes`, `Bool` or `Int` | required |
 | [`condition`](#condition) | `JSONDocument` | `Bool` | required |
+| [`assert.true`](#asserttrue) | `Bool` | `Bool` | optional |
 | [`exec.command`](#execcommand) | none (source) | `Command` | required |
 | [`exec`](#exec) | `Command` | `CommandResult` | rejected |
 | [`exec.stdout`](#execstdout-execstderr-execexit_code) | `CommandResult` | `Bytes` | rejected |
@@ -303,6 +304,7 @@ Twenty capabilities ship in V0. None produces more than one output.
 | [`http.from_url`](#httpfrom_url) | `Text` | `HTTPRequest` | optional |
 | [`http.with_header`](#httpwith_header) | `HTTPRequest`, `Text` | `HTTPRequest` | required |
 | [`http.with_body`](#httpwith_body) | `HTTPRequest`, `Bytes` | `HTTPRequest` | rejected |
+| [`http.assert_status`](#httpassert_status) | `HTTPResponse` | `HTTPResponse` | required |
 
 **Extractors are load-bearing.** A node has exactly one output, so a node
 producing several values bundles them into one type: `CommandResult` carries
@@ -548,11 +550,59 @@ Semantics worth knowing:
   execution, so restricting it to scalars keeps the comparison total.
 - **It does not branch.** A verdict is data, like any value on an edge. V0 has no
   branching semantics, and putting control flow inside a node instead of in the
-  graph would be the wrong place for it.
+  graph would be the wrong place for it. To act on a verdict, feed it to
+  [`assert.true`](#asserttrue), which turns a false one into a failed run.
 
 **Compile errors** (all `invalid_input`): `missing_path`, `bad_path`,
 `missing_test`, `ambiguous_test`, `unsupported_equals`, `bad_equals`.
 **Run-time errors:** none. Once configured, this node always produces a verdict.
+
+### `assert.true`
+
+Turns a verdict into the run's outcome.
+
+- **Input:** port `in`, `Bool`.
+- **Output:** port `out`, the same `Bool`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `message` | string | no | Replaces the default failure text. It is what a person reads when the run fails, so it should say what was expected. |
+
+```yaml
+require_healthy:
+  uses: assert.true
+  needs: [is_healthy]
+  with:
+    message: service is not reporting status ok
+```
+
+A false verdict fails the step, which stops the run and gives the process a
+non-zero exit code. That is what makes a pipeline usable from cron or CI, where
+the exit code is the whole interface.
+
+**This is the engine's only conditional execution.** There is no branching: a
+`Bool` is data, and nothing consumes it as control flow. What exists instead is
+that a failed step stops the run, and this node is the bridge to it. The verdict
+passes through rather than being consumed, so a step that must run only after an
+assertion holds takes that `Bool` as its input:
+
+```yaml
+notify:
+  uses: exec
+  needs: [require_healthy, command]   # never runs if the assertion failed
+```
+
+What this deliberately does not cover is "carry on quietly if the verdict is
+false". Suppressing part of a graph without failing needs a skipped terminal
+state the scheduler honours, which is engine work and is not built.
+
+**There is no `assert.false`.** A negative test belongs in the node that
+produced the verdict, where `condition` already expresses it with `equals` or
+with `exists: false`.
+
+**Run-time errors:** `assertion_failed` (`permanent`, not retryable). Re-testing
+the same verdict reaches the same answer; retrying the work that produced it is
+that step's own `retry` policy.
 
 ### `exec.command`
 
@@ -910,6 +960,43 @@ The body is not wrapped, encoded, or given a content type: pairing this with
 
 **Run-time errors:** none.
 
+### `http.assert_status`
+
+Fails the run when a response carries an unacceptable status.
+
+- **Input:** port `in`, `HTTPResponse`.
+- **Output:** port `out`, the same `HTTPResponse`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `equals` | int | one of | An exact code. |
+| `min` / `max` | int | `equals` or a range | A closed interval. Either end may be omitted. |
+
+```yaml
+ok:
+  uses: http.assert_status
+  needs: [fetch]
+  with:
+    min: 200
+    max: 299
+```
+
+A non-2xx status is data, and `http.request` is right not to fail on one: only
+the workflow knows whether a 404 is a problem. This is how a workflow says that
+it is, without giving up that principle anywhere else. The step is opt-in, and a
+pipeline that wants to inspect a 404 simply does not add one.
+
+The response passes through, so the steps that read it can depend on this one
+and will not run at all when the status is wrong.
+
+A code outside 100 to 599 is rejected at compile time, because `equals: 20` is a
+typo rather than a status a response could carry.
+
+**Compile errors** (all `invalid_input`): `missing_test`, `ambiguous_test`,
+`bad_range`, `bad_status`. **Run-time errors:** `unexpected_status`
+(`permanent`, not retryable). Retrying the call is `http.request`'s policy, not
+this step's.
+
 ## Errors
 
 Every node failure is a `NodeError` with a fixed vocabulary, never a panic used
@@ -1072,11 +1159,13 @@ compiles, because a missing path is a verdict rather than an error. Change
 `needs: [fetch]` on `document` to skip `http.body` and it does not, because
 `json.decode` takes `Bytes` and `fetch` produces `HTTPResponse`.
 
-The other bundled examples are `examples/chaining.yaml` (using one call's result
-to build the next, with a computed URL and a token from the environment),
-`examples/json.yaml` (fan-out to three conditions sharing one decoded document),
-`examples/exec.yaml` (running a local process), and `examples/broken.yaml` (a
-deliberate one-character type error, to show what rejection looks like).
+The other bundled examples are `examples/monitor.yaml` (a cron-ready health
+check that fails the run when a service is unhealthy), `examples/chaining.yaml`
+(using one call's result to build the next, with a computed URL and a token from
+the environment), `examples/json.yaml` (fan-out to three conditions sharing one
+decoded document), `examples/exec.yaml` (running a local process), and
+`examples/broken.yaml` (a deliberate one-character type error, to show what
+rejection looks like).
 
 ## See also
 

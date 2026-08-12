@@ -183,6 +183,7 @@ the workflow failed is a decision only the workflow can make, typically with a
 | `json.encode` | `JSONDocument` | `Bytes` | The inverse, so a pipeline can produce a payload and not only consume one. |
 | `json.get` | `JSONDocument` | `Text`, `Bytes`, `Bool`, or `Int` | Reads `with.path` as the type `with.as` names; never coerces. |
 | `condition` | `JSONDocument` | `Bool` | Tests a path with `equals` or `exists`; no branching in V0. |
+| `assert.true` | `Bool` | `Bool` | Fails the run on a false verdict, which is how a check becomes an exit code. |
 | `exec.command` | (none) | `Command` | Builds a command to run from `with.name`/`with.args`/`with.dir`/`with.timeout`. |
 | `exec` | `Command` | `CommandResult` | Runs the process; a non-zero exit code is data, a failure to start it is not. |
 | `exec.stdout` | `CommandResult` | `Bytes` | Extracts the output stream. |
@@ -196,6 +197,7 @@ the workflow failed is a decision only the workflow can make, typically with a
 | `http.from_url` | `Text` | `HTTPRequest` | A request whose URL comes from an edge; the URL is checked on arrival rather than at compile time. |
 | `http.with_header` | `HTTPRequest`, `Text` | `HTTPRequest` | Sets `with.name` from an edge, producing a new request. |
 | `http.with_body` | `HTTPRequest`, `Bytes` | `HTTPRequest` | Sets the body from an edge, producing a new request. |
+| `http.assert_status` | `HTTPResponse` | `HTTPResponse` | Opt in to failing on a status outside `with.equals` or `with.min`/`with.max`. |
 
 A node has one output, so a node producing several values bundles them into one
 type. The extractors above are what put an individual field back on an edge;
@@ -206,6 +208,12 @@ and the graph shows it: `text.format` composes a string from typed ports, and
 the `http.from_url`/`with_header`/`with_body` trio assembles a request from
 edges. That keeps the convenience of `${{ ... }}` while the compiler still
 checks every value's type and presence (ADR 0010).
+
+There is no branching either. The assertions are how a computed fact becomes the
+run's outcome: a false verdict fails the step, which stops the run and exits
+non-zero, so a pipeline is usable from cron or CI where the exit code is the
+whole interface. Since the assertions pass their input through, a step that
+consumes one runs only when it held. See `examples/monitor.yaml`.
 
 ## Performance
 

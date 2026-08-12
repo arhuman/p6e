@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/arhuman/p6e/internal/node"
+	"github.com/arhuman/p6e/internal/nodes/assert"
 	"github.com/arhuman/p6e/internal/nodes/condition"
 	"github.com/arhuman/p6e/internal/nodes/env"
 	"github.com/arhuman/p6e/internal/nodes/exec"
@@ -51,6 +52,7 @@ func Definitions() []node.Definition {
 		jsonnode.EncodeDefinition(),
 		jsonnode.GetDefinition(),
 		condition.Definition(),
+		assert.TrueDefinition(),
 		exec.CommandDefinition(),
 		exec.Definition(),
 		exec.StdoutDefinition(),
@@ -64,5 +66,6 @@ func Definitions() []node.Definition {
 		httpnode.FromURLDefinition(),
 		httpnode.WithHeaderDefinition(),
 		httpnode.WithBodyDefinition(),
+		httpnode.AssertStatusDefinition(),
 	}
 }

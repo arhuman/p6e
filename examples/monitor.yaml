@@ -1,0 +1,87 @@
+# A monitor: check a service, fail the run when it is unhealthy.
+#
+# This is what p6e is for today. Run it from cron and use the exit code:
+#
+#   */5 * * * * p6e run /etc/p6e/monitor.yaml || page-someone
+#
+# The engine has no branching, and this pipeline does not need any. A failed
+# step stops the run and exits non-zero, so an assertion is how a computed fact
+# becomes the outcome the scheduler acts on. Everything before the assertions is
+# ordinary data: a 404 and a degraded status are values, right up until a step
+# says they are unacceptable.
+#
+# Steps that depend on an assertion run only when it held. "needs" means
+# "consumes the output of", so the assertions pass their input through and a
+# later step takes it, which is the only conditional execution the engine
+# offers without a skip state in the scheduler.
+#
+# This example reaches the network, so p6e check validates it offline but
+# p6e run needs connectivity.
+
+version: 1
+
+steps:
+  request:
+    uses: http.build
+    with:
+      url: https://api.github.com/repos/golang/go
+      headers:
+        Accept: application/vnd.github+json
+
+  fetch:
+    uses: http.request
+    needs: [request]
+    with:
+      timeout: 10s
+    # A timeout is transient and worth another attempt. A bad status is not a
+    # failure here at all: the next step decides what it means.
+    retry:
+      max_attempts: 3
+      backoff: 200ms
+
+  # Opt in to treating a non-2xx as a failure. Without this step the status is
+  # just data, which is what lets other pipelines inspect a 404 instead.
+  ok:
+    uses: http.assert_status
+    needs: [fetch]
+    with:
+      min: 200
+      max: 299
+
+  # Everything below consumes "ok" rather than "fetch", so none of it runs when
+  # the status assertion fails.
+  body:
+    uses: http.body
+    needs: [ok]
+
+  document:
+    uses: json.decode
+    needs: [body]
+
+  is_public:
+    uses: condition
+    needs: [document]
+    with:
+      path: private
+      equals: false
+
+  require_public:
+    uses: assert.true
+    needs: [is_public]
+    with:
+      message: repository is private, which this monitor does not expect
+
+  # A second check on the same document. Both run concurrently against one
+  # decoded value; the engine shares a reference and does not copy.
+  has_a_name:
+    uses: condition
+    needs: [document]
+    with:
+      path: name
+      exists: true
+
+  require_name:
+    uses: assert.true
+    needs: [has_a_name]
+    with:
+      message: response carries no repository name, so the API shape has changed
