@@ -50,15 +50,42 @@ func benchPlan(b *testing.B, src string) *pipeline.ExecutionPlan {
 // runPlan is the measured loop, shared so every benchmark reports the same
 // per-step figure.
 func runPlan(b *testing.B, plan *pipeline.ExecutionPlan) {
+	runPlanWith(b, plan, Options{})
+}
+
+func runPlanWith(b *testing.B, plan *pipeline.ExecutionPlan, opts Options) {
 	ctx := context.Background()
 
 	b.ReportAllocs()
 	for b.Loop() {
-		if ex := Run(ctx, plan, Options{}); ex.Failed() {
+		if ex := Run(ctx, plan, opts); ex.Failed() {
 			b.Fatalf("execution failed: %v", ex.Err())
 		}
 	}
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(plan.Len()), "ns/step")
+}
+
+// BenchmarkChainInlined is BenchmarkChain with the inline fast path on, which is
+// the shape it was built for: every step is the only one ready.
+func BenchmarkChainInlined(b *testing.B) {
+	runPlanWith(b, benchPlan(b, chainSource(5)), Options{InlineSoloSteps: true})
+}
+
+// BenchmarkSequential100Inlined is where inlining should pay most, since all 100
+// steps qualify.
+func BenchmarkSequential100Inlined(b *testing.B) {
+	runPlanWith(b, benchPlan(b, chainSource(100)), Options{InlineSoloSteps: true})
+}
+
+// BenchmarkFanOut100Inlined confirms inlining costs nothing where it does not
+// apply: only the root qualifies.
+func BenchmarkFanOut100Inlined(b *testing.B) {
+	var sb strings.Builder
+	sb.WriteString("version: 1\nsteps:\n  root:\n    uses: source\n")
+	for i := range 100 {
+		fmt.Fprintf(&sb, "  leaf%d:\n    uses: noop\n    needs: [root]\n", i)
+	}
+	runPlanWith(b, benchPlan(b, sb.String()), Options{InlineSoloSteps: true})
 }
 
 // chainSource builds source -> noop -> ... -> noop.

@@ -45,6 +45,18 @@ type Options struct {
 	// in Execution.Mutations. This is a debugging facility, far too expensive
 	// to leave on in production.
 	DetectMutation bool
+	// InlineSoloSteps runs a step on the calling goroutine when it is the only
+	// one ready and nothing else is in flight, which removes the goroutine
+	// handoff that ADR 0003 measured as most of a step's cost. It roughly halves
+	// per-step overhead on a sequential chain.
+	//
+	// It is off by default because it trades away the timing guarantees above:
+	// while an inlined node runs, the coordinator is inside it and cannot
+	// abandon it. A node that ignores its context wedges Run rather than leaking
+	// a goroutine. Turn this on when the nodes in the pipeline are known to
+	// honour cancellation, and leave it off when running anything you do not
+	// control (ADR 0008).
+	InlineSoloSteps bool
 }
 
 var executionCounter atomic.Uint64
@@ -122,10 +134,10 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 	inflight := 0
 	stopped := false
 
-	// launch runs one step. It is called only from this goroutine, which owns
-	// ex.Steps, so gathering inputs here needs no synchronization: the values
-	// are written before the go statement that reads them.
-	launch := func(i int) {
+	// prepare gathers a step's inputs and execution context. It runs only on
+	// this goroutine, which owns ex.Steps, so no synchronization is needed: the
+	// values are written before the go statement that reads them.
+	prepare := func(i int) []node.Value {
 		step := &plan.Steps[i]
 		in := inputs[step.InputOffset : step.InputOffset+len(step.Deps)]
 		for port, dep := range step.Deps {
@@ -137,6 +149,12 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 			StepID:      step.ID,
 		}
 		ex.Steps[i].State = StateRunning
+		return in
+	}
+
+	launch := func(i int) {
+		in := prepare(i)
+		step := &plan.Steps[i]
 		inflight++
 		go func() {
 			done <- completion{index: i, result: runStep(runCtx, step, &contexts[i], in)}
@@ -174,32 +192,56 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 
 	guard := newMutationGuard(opts.DetectMutation, len(plan.Steps))
 
-	ready = append(ready, plan.Roots...)
-	pump()
+	// handle records a completion and releases whatever it unblocked. Both the
+	// asynchronous and the inline path go through it, so they cannot drift.
+	handle := func(c completion) {
+		if ex.record(c) && !stopped {
+			stopped = true
+			ex.FailedStep = c.index
+			windDown()
+		}
+		guard.record(c.index, ex.Steps[c.index].Value)
+		// Steps still in flight are allowed to finish and be recorded, but
+		// nothing new starts once the execution has stopped.
+		if stopped {
+			return
+		}
+		for _, dependent := range plan.Steps[c.index].Dependents {
+			unmet[dependent]--
+			if unmet[dependent] == 0 {
+				ready = append(ready, dependent)
+			}
+		}
+	}
 
+	ready = append(ready, plan.Roots...)
 	abandoned := false
-	for inflight > 0 && !abandoned {
+
+	for !abandoned {
+		// The inline fast path: with nothing else running and exactly one step
+		// ready, the goroutine and the channel round trip buy nothing, and they
+		// are most of what a step costs. The cost is that the coordinator is
+		// inside the node while it runs and cannot abandon it, which is why this
+		// is opt-in.
+		if opts.InlineSoloSteps && !stopped && inflight == 0 && len(ready)-launched == 1 {
+			i := ready[launched]
+			launched++
+			in := prepare(i)
+			handle(completion{index: i, result: runStep(runCtx, &plan.Steps[i], &contexts[i], in)})
+			continue
+		}
+
+		if !stopped {
+			pump()
+		}
+		if inflight == 0 {
+			break
+		}
+
 		select {
 		case c := <-done:
 			inflight--
-			if ex.record(c) && !stopped {
-				stopped = true
-				ex.FailedStep = c.index
-				windDown()
-			}
-			guard.record(c.index, ex.Steps[c.index].Value)
-			// Steps still in flight are allowed to finish and be recorded, but
-			// nothing new starts once the execution has stopped.
-			if stopped {
-				continue
-			}
-			for _, dependent := range plan.Steps[c.index].Dependents {
-				unmet[dependent]--
-				if unmet[dependent] == 0 {
-					ready = append(ready, dependent)
-				}
-			}
-			pump()
+			handle(c)
 
 		case <-callerDone:
 			callerDone = nil

@@ -222,3 +222,21 @@ func TestRunOptionHandling(t *testing.T) {
 		t.Errorf("unknown option: exit %d, want %d (stderr: %s)", code, exitUsage, stderr)
 	}
 }
+
+func TestRunAcceptsInline(t *testing.T) {
+	example := filepath.Join("..", "..", "examples", "json.yaml")
+
+	code, stdout, stderr := invoke(t, "run", "--inline", example)
+	if code != exitOK {
+		t.Fatalf("exit %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "ok:") {
+		t.Errorf("inlining should not change the outcome:\n%s", stdout)
+	}
+
+	// The options compose, since one is a debugging aid and the other a
+	// scheduling choice.
+	if code, _, _ := invoke(t, "run", "--inline", "--detect-mutation", example); code != exitOK {
+		t.Errorf("combined options: exit %d, want %d", code, exitOK)
+	}
+}

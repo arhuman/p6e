@@ -198,13 +198,18 @@ Measured on an Apple M3 Pro, Go 1.26.5, darwin/arm64 (`docs/adr/0003-v0-baseline
 - Compiling a 100-step pipeline takes 26 us, paid once per plan and never per
   run.
 
-About 60% of a step's cost is the scheduler's goroutine handoff: the executor
-spawns a goroutine per ready step and receives completion on a channel, and
-that round trip alone measures 254 ns. The identified next optimization is
-running a solitary ready step inline, on the coordinator goroutine, instead of
-spawning one; it is not built yet, in favor of the current single-owner
-executor design that is race-free by construction. See ADR 0003 for the full
-measurement set and the reasoning.
+Most of a step's cost was the scheduler's goroutine handoff, which measures
+254 ns on its own. `p6e run --inline` removes it for any step that is the only
+one ready, taking a 100-step chain from 486 to **101 ns per step** and its
+allocations from 112 to 12 per run. Fan-out is unaffected, since only the root of
+a fan-out is ever solitary.
+
+It is off by default, and the reason is worth knowing: an inlined step runs on
+the coordinator goroutine, so while it runs nothing is left to abandon it. By
+default `p6e` guarantees that `Run` returns within `AbandonAfter` once the
+execution is cancelled or has failed, even if a node ignores its context; with
+`--inline`, such a node wedges the run instead. Turn it on for pipelines whose
+nodes you control. See ADR 0003, ADR 0004 and ADR 0008.
 
 ## Adding a node
 

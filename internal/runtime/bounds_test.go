@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,5 +215,96 @@ func TestDefaultConcurrencyAllowsFanOut(t *testing.T) {
 	}
 	if peak := tracker.peak.Load(); peak < 2 {
 		t.Errorf("peak concurrency was %d: the default must not serialize independent steps", peak)
+	}
+}
+
+// Inlining must not change what a pipeline computes, only how it gets there.
+func TestInlineSoloStepsProducesTheSameResult(t *testing.T) {
+	plan := compile(t, chain, nil)
+
+	async := Run(context.Background(), plan, Options{})
+	inline := Run(context.Background(), plan, Options{InlineSoloSteps: true})
+
+	if async.Failed() || inline.Failed() {
+		t.Fatalf("execution failed: %v / %v", async.Err(), inline.Err())
+	}
+	if boxOf(t, mustResult(t, inline, "c")).N != boxOf(t, mustResult(t, async, "c")).N {
+		t.Error("inlining changed the result")
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if got := mustResult(t, inline, id).State; got != StateSucceeded {
+			t.Errorf("step %q is %s, want succeeded", id, got)
+		}
+	}
+}
+
+// Inlining applies only when a step is alone. A fan-out must still run its
+// branches concurrently, so the rendezvous cannot deadlock.
+func TestInlineSoloStepsStillFansOut(t *testing.T) {
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+
+	plan := compile(t, `
+version: 1
+steps:
+  a:
+    uses: source
+  left:
+    uses: rendezvous
+    needs: [a]
+  right:
+    uses: rendezvous
+    needs: [a]
+`, func(r *node.Registry) {
+		r.MustRegister(node.Static("rendezvous", node.NewTypedNode("rendezvous",
+			func(ctx context.Context, _ *node.ExecutionContext, b *box) node.Result[*box] {
+				arrived.Done()
+				done := make(chan struct{})
+				go func() { arrived.Wait(); close(done) }()
+				select {
+				case <-done:
+					return node.Ok(b)
+				case <-time.After(2 * time.Second):
+					return node.Fail[*box](node.Errf(node.KindInternal, "serialized",
+						"branches did not run concurrently"))
+				case <-ctx.Done():
+					return node.Fail[*box](node.Normalize(ctx.Err(), "cancelled"))
+				}
+			})))
+	})
+
+	if ex := Run(context.Background(), plan, Options{InlineSoloSteps: true}); ex.Failed() {
+		t.Fatalf("execution failed: %v", ex.Err())
+	}
+}
+
+// Failure handling and skip propagation must survive the inline path, since it
+// records completions through the same code.
+func TestInlineSoloStepsPropagatesFailure(t *testing.T) {
+	plan := compile(t, `
+version: 1
+steps:
+  a:
+    uses: source
+  boom:
+    uses: boom.typed
+    needs: [a]
+  after:
+    uses: bump
+    needs: [boom]
+`, func(r *node.Registry) {
+		r.MustRegister(node.Static("boom.typed", node.NewTypedNode("boom.typed",
+			func(_ context.Context, _ *node.ExecutionContext, b *box) node.Result[*box] {
+				return node.Fail[*box](node.Errf(node.KindPermanent, "boom", "exploded"))
+			})))
+	})
+
+	ex := Run(context.Background(), plan, Options{InlineSoloSteps: true})
+
+	if !ex.Failed() {
+		t.Fatal("expected the execution to fail")
+	}
+	if got := mustResult(t, ex, "after").State; got != StateSkipped {
+		t.Errorf("after is %s, want skipped", got)
 	}
 }

@@ -34,6 +34,10 @@ Usage:
 Options for run:
   --detect-mutation           report nodes that mutate a value they do not own.
                               Expensive: for debugging, not production.
+  --inline                    run a solitary ready step on the main goroutine.
+                              Much faster on sequential pipelines, but a node
+                              that ignores cancellation will wedge the run
+                              instead of being abandoned.
 `
 
 // Exit codes, so a caller can tell a broken pipeline from a broken invocation.
@@ -59,13 +63,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return checkCommand(path, stdout, stderr)
 		})
 	case "run":
-		files, detectMutation, unknown := splitRunArgs(args[1:])
+		files, runOpts, unknown := splitRunArgs(args[1:])
 		if unknown != "" {
 			fmt.Fprintf(stderr, "unknown option %q\n\n%s", unknown, usage)
 			return exitUsage
 		}
 		return withFile(append(args[:1], files...), stderr, func(path string) int {
-			return runCommand(ctx, path, stdout, stderr, detectMutation)
+			return runCommand(ctx, path, stdout, stderr, runOpts)
 		})
 	case "nodes":
 		for _, name := range nodes.Registry().Names() {
@@ -84,18 +88,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 // splitRunArgs separates run's options from its file argument. It is a hand
 // rolled two-option parser rather than a flag.FlagSet because the CLI takes the
 // verb first, which the standard package does not model.
-func splitRunArgs(args []string) (files []string, detectMutation bool, unknown string) {
+func splitRunArgs(args []string) (files []string, opts runtime.Options, unknown string) {
 	for _, arg := range args {
 		switch {
 		case arg == "--detect-mutation":
-			detectMutation = true
+			opts.DetectMutation = true
+		case arg == "--inline":
+			opts.InlineSoloSteps = true
 		case strings.HasPrefix(arg, "-"):
-			return nil, false, arg
+			return nil, runtime.Options{}, arg
 		default:
 			files = append(files, arg)
 		}
 	}
-	return files, detectMutation, ""
+	return files, opts, ""
 }
 
 func withFile(args []string, stderr io.Writer, fn func(path string) int) int {
@@ -115,7 +121,7 @@ func checkCommand(path string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func runCommand(ctx context.Context, path string, stdout, stderr io.Writer, detectMutation bool) int {
+func runCommand(ctx context.Context, path string, stdout, stderr io.Writer, opts runtime.Options) int {
 	plan, code := compile(path, stderr)
 	if plan == nil {
 		return code
@@ -126,7 +132,7 @@ func runCommand(ctx context.Context, path string, stdout, stderr io.Writer, dete
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	execution := runtime.Run(ctx, plan, runtime.Options{DetectMutation: detectMutation})
+	execution := runtime.Run(ctx, plan, opts)
 	report(execution, stdout, stderr)
 
 	if execution.Failed() {
