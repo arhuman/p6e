@@ -82,7 +82,10 @@ type compiler struct {
 	ids   []string
 	index map[string]int
 
-	nodes    []node.RuntimeNode
+	nodes []node.RuntimeNode
+	// deps holds each step's dependencies as indices in port order, resolved
+	// from either needs form by checkEdges and reused when building the plan.
+	deps     [][]int
 	problems []Problem
 }
 
@@ -118,7 +121,7 @@ func (c *compiler) resolve() {
 
 func (c *compiler) checkDependencies() {
 	for _, id := range c.ids {
-		for _, dep := range c.file.Steps[id].Needs {
+		for _, dep := range c.file.Steps[id].Needs.Steps() {
 			if _, ok := c.index[dep]; !ok {
 				c.fail(id, "needs %q, which is not a step in this pipeline", dep)
 			}
@@ -141,7 +144,7 @@ func (c *compiler) checkCycles() {
 	visit = func(i int) bool {
 		color[i] = grey
 		path = append(path, i)
-		for _, dep := range c.file.Steps[c.ids[i]].Needs {
+		for _, dep := range c.file.Steps[c.ids[i]].Needs.Steps() {
 			j := c.index[dep]
 			switch color[j] {
 			case grey:
@@ -181,27 +184,80 @@ func (c *compiler) reportCycle(path []int, back int) {
 	c.fail("", "dependency cycle: %s", strings.Join(names, " needs "))
 }
 
-// checkEdges is the type check: the reason this engine compiles at all.
+// checkEdges resolves each step's needs to dependency indices in port order,
+// then type checks every edge. This is the reason the engine compiles at all.
 func (c *compiler) checkEdges() {
+	c.deps = make([][]int, len(c.ids))
+
 	for i, id := range c.ids {
 		step := c.file.Steps[id]
 		desc := c.nodes[i].Descriptor()
 
-		if len(step.Needs) != desc.Arity() {
-			c.fail(id, "node %q expects %d input(s) %s but needs lists %d",
-				step.Uses, desc.Arity(), desc.InputTypes(), len(step.Needs))
+		deps, ok := c.resolveNeeds(id, step, desc)
+		if !ok {
 			continue
 		}
+		c.deps[i] = deps
 
-		for port, dep := range step.Needs {
+		for port, dep := range deps {
 			want := desc.Inputs[port].Type
-			got := c.nodes[c.index[dep]].Descriptor().Output.Type
+			got := c.nodes[dep].Descriptor().Output.Type
 			if want != got {
 				c.fail(id, "input %q expects %s but step %q produces %s",
-					desc.Inputs[port].Name, want, dep, got)
+					desc.Inputs[port].Name, want, c.ids[dep], got)
 			}
 		}
 	}
+}
+
+// resolveNeeds turns either needs form into dependency indices ordered by input
+// port, which is what the rest of the compiler and the executor work with.
+func (c *compiler) resolveNeeds(id string, step Step, desc node.Descriptor) ([]int, bool) {
+	if step.Needs.Named() {
+		return c.resolveNamedNeeds(id, step, desc)
+	}
+
+	list := step.Needs.Positional()
+	if len(list) != desc.Arity() {
+		c.fail(id, "node %q expects %d input(s) %s but needs lists %d",
+			step.Uses, desc.Arity(), desc.InputTypes(), len(list))
+		return nil, false
+	}
+	deps := make([]int, len(list))
+	for port, dep := range list {
+		deps[port] = c.index[dep]
+	}
+	return deps, true
+}
+
+// resolveNamedNeeds binds by input port name. Every port must be bound and
+// every binding must name a real port, so a typo cannot silently leave an input
+// unconnected.
+func (c *compiler) resolveNamedNeeds(id string, step Step, desc node.Descriptor) ([]int, bool) {
+	deps := make([]int, desc.Arity())
+	bound := make(map[string]bool, desc.Arity())
+	ok := true
+
+	for port, in := range desc.Inputs {
+		dep, found := step.Needs.Port(in.Name)
+		if !found {
+			c.fail(id, "input %q of node %q is not bound by needs (inputs: %s)",
+				in.Name, step.Uses, desc.InputNames())
+			ok = false
+			continue
+		}
+		bound[in.Name] = true
+		deps[port] = c.index[dep]
+	}
+
+	for _, name := range step.Needs.PortNames() {
+		if !bound[name] {
+			c.fail(id, "needs binds %q, but node %q has no such input (inputs: %s)",
+				name, step.Uses, desc.InputNames())
+			ok = false
+		}
+	}
+	return deps, ok
 }
 
 // plan precomputes what the executor would otherwise have to work out on every
@@ -211,10 +267,7 @@ func (c *compiler) plan(name string) *ExecutionPlan {
 
 	for i, id := range c.ids {
 		step := c.file.Steps[id]
-		deps := make([]int, len(step.Needs))
-		for port, dep := range step.Needs {
-			deps[port] = c.index[dep]
-		}
+		deps := c.deps[i]
 		p.Steps[i] = CompiledStep{
 			ID:          id,
 			Node:        c.nodes[i],

@@ -71,8 +71,9 @@ value
 
 A pipeline has two phases: compile, then run. Compiling turns a YAML file into
 an `ExecutionPlan`: it resolves every `uses` name against the node registry,
-checks that dependencies exist, detects cycles, binds each step's `needs` list
-positionally to its node's declared input ports (ADR 0002), checks that the
+checks that dependencies exist, detects cycles, binds each step's `needs` to its
+node's declared input ports (a list binds positionally, a mapping binds by port
+name: ADR 0002 and ADR 0005), checks that the
 type each edge carries matches what the consuming port expects, and decodes
 each step's `with` block into the node's config, rejecting unknown fields.
 Anything checkable before execution is checked here; the executor consumes a

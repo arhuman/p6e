@@ -48,6 +48,13 @@ func testRegistry(t *testing.T) *node.Registry {
 			return node.Ok(&beta{S: b.S})
 		})))
 
+	// Two ports of the same type: the shape where positional binding type
+	// checks either way round and a swap is therefore silent.
+	r.MustRegister(node.Static("pair", node.NewTypedNode2("pair",
+		func(_ context.Context, _ *node.ExecutionContext, first *alpha, second *alpha) node.Result[*beta] {
+			return node.Ok(&beta{S: "paired"})
+		})))
+
 	r.MustRegister(node.Definition{
 		Name: "picky",
 		New: func(cfg node.Config) (node.RuntimeNode, error) {
@@ -309,5 +316,167 @@ steps:
 
 	if got := p.Steps[0].Retry.MaxAttempts; got != 4 {
 		t.Errorf("MaxAttempts = %d, want 4", got)
+	}
+}
+
+// The named form binds by input port name, so the order the mapping happens to
+// be written in carries no meaning.
+func TestCompileBindsNeedsByPortName(t *testing.T) {
+	p := mustCompile(t, `
+version: 1
+steps:
+  source:
+    uses: make.alpha
+  convert:
+    uses: alpha.to.beta
+    needs: [source]
+  joined:
+    uses: join
+    needs:
+      in1: convert
+      in0: source
+`)
+
+	joined, _ := p.StepIndex("joined")
+	source, _ := p.StepIndex("source")
+	convert, _ := p.StepIndex("convert")
+
+	deps := p.Steps[joined].Deps
+	if len(deps) != 2 || deps[0] != source || deps[1] != convert {
+		t.Errorf("joined deps = %v, want [%d %d]: in0 then in1, not mapping order",
+			deps, source, convert)
+	}
+}
+
+// This is the failure ADR 0005 exists to prevent. With positional binding both
+// orders type check and mean different things; with named binding the meaning
+// is fixed by the port name.
+func TestNamedBindingIsImmuneToSwapping(t *testing.T) {
+	first := mustCompile(t, `
+version: 1
+steps:
+  left:
+    uses: make.alpha
+  right:
+    uses: alpha.bump
+    needs: [left]
+  paired:
+    uses: pair
+    needs:
+      in0: left
+      in1: right
+`)
+	swapped := mustCompile(t, `
+version: 1
+steps:
+  left:
+    uses: make.alpha
+  right:
+    uses: alpha.bump
+    needs: [left]
+  paired:
+    uses: pair
+    needs:
+      in1: right
+      in0: left
+`)
+
+	a, _ := first.StepIndex("paired")
+	b, _ := swapped.StepIndex("paired")
+	if first.Steps[a].Deps[0] != swapped.Steps[b].Deps[0] || first.Steps[a].Deps[1] != swapped.Steps[b].Deps[1] {
+		t.Errorf("writing the mapping in a different order changed the binding: %v against %v",
+			first.Steps[a].Deps, swapped.Steps[b].Deps)
+	}
+
+	// The positional equivalent of the same swap does change meaning, which is
+	// exactly why the named form was added.
+	positional := mustCompile(t, `
+version: 1
+steps:
+  left:
+    uses: make.alpha
+  right:
+    uses: alpha.bump
+    needs: [left]
+  paired:
+    uses: pair
+    needs: [right, left]
+`)
+	c, _ := positional.StepIndex("paired")
+	if positional.Steps[c].Deps[0] == first.Steps[a].Deps[0] {
+		t.Error("the positional swap should have produced a different binding")
+	}
+}
+
+func TestCompileRejectsUnboundInput(t *testing.T) {
+	got := problems(t, `
+version: 1
+steps:
+  source:
+    uses: make.alpha
+  joined:
+    uses: join
+    needs:
+      in0: source
+`)
+
+	if !strings.Contains(got, `"in1"`) || !strings.Contains(got, "not bound") {
+		t.Errorf("problems = %q, should report that in1 is unbound", got)
+	}
+}
+
+// A typo in a port name must fail rather than silently leave the input
+// unconnected.
+func TestCompileRejectsUnknownPortName(t *testing.T) {
+	got := problems(t, `
+version: 1
+steps:
+  source:
+    uses: make.alpha
+  convert:
+    uses: alpha.to.beta
+    needs: [source]
+  joined:
+    uses: join
+    needs:
+      in0: source
+      in2: convert
+`)
+
+	if !strings.Contains(got, `"in2"`) || !strings.Contains(got, "no such input") {
+		t.Errorf("problems = %q, should reject the unknown port name", got)
+	}
+}
+
+func TestNamedBindingTypeChecksPerPort(t *testing.T) {
+	got := problems(t, `
+version: 1
+steps:
+  source:
+    uses: make.alpha
+  convert:
+    uses: alpha.to.beta
+    needs: [source]
+  joined:
+    uses: join
+    needs:
+      in0: convert
+      in1: convert
+`)
+
+	if !strings.Contains(got, `input "in0" expects Alpha`) {
+		t.Errorf("problems = %q, should report the mistyped port", got)
+	}
+}
+
+func TestNeedsRejectsUnusableForms(t *testing.T) {
+	cases := map[string]string{
+		"scalar":     "version: 1\nsteps:\n  a:\n    uses: x\n    needs: fetch\n",
+		"empty bind": "version: 1\nsteps:\n  a:\n    uses: x\n    needs:\n      in0: \"\"\n",
+	}
+	for name, src := range cases {
+		if _, err := Parse(strings.NewReader(src)); err == nil {
+			t.Errorf("%s: expected needs to be rejected", name)
+		}
 	}
 }

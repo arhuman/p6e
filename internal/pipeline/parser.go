@@ -70,7 +70,7 @@ func (f *File) validate() error {
 		if step.Retry != nil && step.Retry.MaxAttempts < 1 {
 			return fmt.Errorf("step %q: retry.max_attempts must be at least 1, got %d", id, step.Retry.MaxAttempts)
 		}
-		if slices.Contains(step.Needs, id) {
+		if slices.Contains(step.Needs.Steps(), id) {
 			return fmt.Errorf("step %q needs itself", id)
 		}
 	}

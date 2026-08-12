@@ -4,7 +4,11 @@ Date: 2026-08-12
 
 ## Status
 
-Accepted
+Accepted, extended by ADR 0005.
+
+The positional form described here remains valid and remains the idiom for
+single-input steps. ADR 0005 adds the named form this document anticipated under
+Risks, because the swap trap it predicted is real.
 
 ## Context
 

@@ -41,7 +41,7 @@ func TestParseMinimal(t *testing.T) {
 	if len(f.Steps) != 2 {
 		t.Fatalf("got %d steps, want 2", len(f.Steps))
 	}
-	if got := f.Steps["decode"].Needs; len(got) != 1 || got[0] != "fetch" {
+	if got := f.Steps["decode"].Needs.Positional(); len(got) != 1 || got[0] != "fetch" {
 		t.Errorf("decode needs = %v, want [fetch]", got)
 	}
 }

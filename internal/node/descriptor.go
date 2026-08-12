@@ -1,6 +1,9 @@
 package node
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // PortDescriptor names one input or output of a node and fixes its type.
 type PortDescriptor struct {
@@ -24,6 +27,19 @@ type Descriptor struct {
 
 // Arity is how many inputs the node requires.
 func (d Descriptor) Arity() int { return len(d.Inputs) }
+
+// InputNames renders the input port names for error messages, which is what a
+// pipeline author needs when binding needs by name.
+func (d Descriptor) InputNames() string {
+	if len(d.Inputs) == 0 {
+		return "none"
+	}
+	parts := make([]string, len(d.Inputs))
+	for i, p := range d.Inputs {
+		parts[i] = strconv.Quote(p.Name)
+	}
+	return strings.Join(parts, ", ")
+}
 
 // InputTypes renders the input signature for error messages.
 func (d Descriptor) InputTypes() string {
