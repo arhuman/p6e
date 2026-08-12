@@ -142,8 +142,8 @@ Two rules an author must not break:
 
 - **Payloads on edges are pointers.** `*Report`, never `Report`. An interface
   holding a pointer allocates nothing on an edge; one holding a struct
-  allocates on every edge, 31 ns and one allocation instead of 13 ns and zero
-  (ADR 0001).
+  allocates on every edge, which measured 31 ns and one allocation against
+  13 ns and zero when the two were compared directly (ADR 0001).
 - **Outputs are immutable.** Fan-out hands every dependent the same reference;
   nothing copies a payload. Producing a changed value means allocating a new
   one, never mutating the one just returned.
@@ -185,19 +185,21 @@ the workflow failed is a decision only the workflow can make, typically with a
 
 ## Performance
 
-Measured on an Apple M3 Pro, Go 1.26.2, darwin/arm64 (`docs/adr/0003-v0-baseline-performance.md`):
+Measured on an Apple M3 Pro, Go 1.26.5, darwin/arm64 (`docs/adr/0003-v0-baseline-performance.md`):
 
-- A step costs about 520 ns of engine overhead on a 100-step chain, independent
+- A step costs about 433 ns of engine overhead on a 100-step chain, independent
   of the node's own work.
-- The typed adapter that bridges a step's Go types to the plan is 15.3 ns per
+- The typed adapter that bridges a step's Go types to the plan is 11.4 ns per
   edge, zero allocations: under 3% of a step's cost.
 - A 16 MiB payload fanned out to 32 consumers allocates 11.9 KB in total for
   the whole run. Fan-out shares one reference; the allocation figure does not
   grow with payload size.
+- Compiling a 100-step pipeline takes 26 us, paid once per plan and never per
+  run.
 
 About 60% of a step's cost is the scheduler's goroutine handoff: the executor
 spawns a goroutine per ready step and receives completion on a channel, and
-that round trip alone measures 318 ns. The identified next optimization is
+that round trip alone measures 254 ns. The identified next optimization is
 running a solitary ready step inline, on the coordinator goroutine, instead of
 spawning one; it is not built yet, in favor of the current single-owner
 executor design that is race-free by construction. See ADR 0003 for the full

@@ -37,6 +37,10 @@ Apple M3 Pro, Go 1.26.2, darwin/arm64. Median of three runs, 100-node identity
 chain, so per-edge figures are amortized. The payload is a 32-byte struct
 (`{int64, []byte}`) except where noted.
 
+All four candidates were measured on the same toolchain, so the comparison holds
+even though the project later pinned Go 1.26.5 and every absolute figure
+improved. See the addendum for the current cost of the winner.
+
 | Approach | ns/edge | allocs/edge | Checks types at |
 |---|---|---|---|
 | Typed function chain (floor, not a viable engine) | 5.3 | 0 | compile time (Go's) |
@@ -128,6 +132,7 @@ through the `RuntimeNode` interface, zero allocations throughout:
 | First working port | 25.4 |
 | ExecutionContext passed by pointer | 15.3 |
 | Descriptor by pointer, error paths only | (included above) |
+| Same code on Go 1.26.5 (the pinned toolchain) | 11.4 |
 
 Two findings worth keeping, because both were invisible until measured and both
 cost more than the type assertion the whole ADR is about:
