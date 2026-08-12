@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # Writing to an already-open writer is the one error Go code
+      # conventionally ignores: the CLI cannot report a failure to report, and
+      # a deferred Close on a drained response body has nothing left to say.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.WriteString
+        - (net/http.ResponseWriter).Write
+        - (io.ReadCloser).Close
+
+  exclusions:
+    rules:
+      # A failed write inside an httptest handler is a broken test harness,
+      # not a code path worth handling.
+      - path: _test\.go
+        linters:
+          - errcheck
