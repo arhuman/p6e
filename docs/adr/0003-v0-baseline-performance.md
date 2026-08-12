@@ -101,6 +101,73 @@ the node contract, or any test.
 
 ## Revisions
 
+**2026-08-12, after the post-review hardening (ADRs 0004 to 0009).** The table
+above is the V0 baseline and is left as recorded. Six changes have landed since,
+and they moved every figure, so this section is the current baseline.
+
+Measured the same way, medians of five runs. The "before" column is the tree at
+`build: pin toolchain go1.26.5`, extracted and benchmarked side by side rather
+than quoted from memory, so the two columns share a machine and a session.
+
+| Shape | Before | Now | Change |
+|---|---|---|---|
+| 100-step chain | 430 ns/step | 491 ns/step | +14% |
+| 5-step chain | 522 | 588 | +13% |
+| 64-leaf fan-in tree | 466 | 514 | +10% |
+| 16 MiB payload to 32 consumers | 538 | 638 | +19% |
+| 100-way fan-out | 455 | 468 | +3% |
+| 5-step chain, 12 goroutines | 179 | 196 | +9% |
+| Compile a 100-step pipeline | 26.9 us | 33.7 us | **+25%** |
+| Goroutine spawn plus channel round trip | 258 | 268 | +4% |
+
+Allocations per run rose by exactly one everywhere (the executor's ready queue).
+Compilation rose by 100, from 313 to 413, and by 5.9 KB.
+
+**The last row is the control.** `BenchmarkGoroutineHandoff` measures code that
+has not changed, and it moved 4%. That is the machine drift and noise floor for
+this session, so the fan-out figure is unchanged and everything at 9% or above is
+real.
+
+### Where the run-time regression came from
+
+The executor's coordinator loop was a bare `c := <-done` receive. It is now a
+three-way `select` over the completion channel, the caller's context, and the
+abandon timer, and a select over three cases costs materially more than a
+single-channel receive. The loop also gained a `pump` call, a `handle` closure
+call, and a disabled-guard call per completion.
+
+That is the price of ADR 0004's guarantee that `Run` honours its context, and it
+is worth paying: 60 ns per step against a failure mode where one bad node wedges
+the process with no recourse. It is recorded here rather than absorbed quietly,
+because a 14% regression that nobody wrote down is indistinguishable from a bug
+in six months.
+
+### Where the compile regression came from
+
+Named binding (ADR 0005) and the ambiguity rule (ADR 0009) both work per step at
+compile time: `Needs` decoding, `resolveNeeds` per step, `AmbiguousInputs`
+building a map per node, and `dependenciesResolve` walking each step's
+dependencies again. 25% and 100 allocations on a cost paid once per plan, in
+exchange for two classes of silent misbinding becoming impossible, is the
+cheapest trade in this document.
+
+### And the opt-in path is far ahead of both
+
+| Shape | Original baseline | Now, default | Now, `--inline` |
+|---|---|---|---|
+| 100-step chain | 517 ns/step | 491 | **98** |
+| 5-step chain | 626 | 588 | 151 |
+| 100-way fan-out | 534 | 468 | 470 |
+
+Allocations for the 100-step chain go from 112 per run to 12, because 100
+goroutine closures disappear. So the honest summary of the whole exercise is that
+the default path got 14% slower to become safe, and the opt-in path is 5x faster
+than the engine ever was. See ADR 0008 for why inlining is not the default.
+
+The engine's overhead per inlined sequential step is now 98 ns, of which the
+typed adapter is 11.65 ns. The remaining 86 ns is per-step bookkeeping, and it is
+the next thing to look at if this ever matters.
+
 **2026-08-12, Go 1.26.2 to 1.26.5.** The original measurements were taken on Go
 1.26.2, before `go.mod` pinned a toolchain to clear five reachable standard
 library advisories. The newer toolchain is uniformly faster: the adapter went

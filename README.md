@@ -189,19 +189,19 @@ the workflow failed is a decision only the workflow can make, typically with a
 
 Measured on an Apple M3 Pro, Go 1.26.5, darwin/arm64 (`docs/adr/0003-v0-baseline-performance.md`):
 
-- A step costs about 433 ns of engine overhead on a 100-step chain, independent
-  of the node's own work.
-- The typed adapter that bridges a step's Go types to the plan is 11.4 ns per
+- A step costs about 491 ns of engine overhead on a 100-step chain, independent
+  of the node's own work, or **98 ns with `--inline`**.
+- The typed adapter that bridges a step's Go types to the plan is 11.65 ns per
   edge, zero allocations: under 3% of a step's cost.
-- A 16 MiB payload fanned out to 32 consumers allocates 11.9 KB in total for
+- A 16 MiB payload fanned out to 32 consumers allocates 12.3 KB in total for
   the whole run. Fan-out shares one reference; the allocation figure does not
   grow with payload size.
-- Compiling a 100-step pipeline takes 26 us, paid once per plan and never per
+- Compiling a 100-step pipeline takes 34 us, paid once per plan and never per
   run.
 
-Most of a step's cost was the scheduler's goroutine handoff, which measures
-254 ns on its own. `p6e run --inline` removes it for any step that is the only
-one ready, taking a 100-step chain from 486 to **101 ns per step** and its
+Most of a step's cost is the scheduler's goroutine handoff, which measures
+268 ns on its own. `p6e run --inline` removes it for any step that is the only
+one ready, taking a 100-step chain from 491 to **98 ns per step** and its
 allocations from 112 to 12 per run. Fan-out is unaffected, since only the root of
 a fan-out is ever solitary.
 
