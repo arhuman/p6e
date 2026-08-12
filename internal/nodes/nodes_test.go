@@ -48,14 +48,20 @@ func TestEveryDefinitionResolves(t *testing.T) {
 // pipeline that uses it, so the set is pinned here.
 func TestCapabilityNames(t *testing.T) {
 	want := map[string]bool{
-		"value":        true,
-		"json.decode":  true,
-		"condition":    true,
-		"exec.command": true,
-		"exec":         true,
-		"http.build":   true,
-		"http.request": true,
-		"http.body":    true,
+		"value":          true,
+		"json.decode":    true,
+		"json.encode":    true,
+		"condition":      true,
+		"exec.command":   true,
+		"exec":           true,
+		"exec.stdout":    true,
+		"exec.stderr":    true,
+		"exec.exit_code": true,
+		"http.build":     true,
+		"http.request":   true,
+		"http.body":      true,
+		"http.status":    true,
+		"http.header":    true,
 	}
 
 	got := Registry().Names()

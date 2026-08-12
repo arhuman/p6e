@@ -178,12 +178,22 @@ the workflow failed is a decision only the workflow can make, typically with a
 |---|---|---|---|
 | `value` | (none) | `Bytes`, `Text`, `Bool`, or `Int` | Constant from `with.type` and `with.value`. |
 | `json.decode` | `Bytes` | `JSONDocument` | Malformed input is `invalid_input`, not retryable. |
+| `json.encode` | `JSONDocument` | `Bytes` | The inverse, so a pipeline can produce a payload and not only consume one. |
 | `condition` | `JSONDocument` | `Bool` | Tests a path with `equals` or `exists`; no branching in V0. |
 | `exec.command` | (none) | `Command` | Builds a command to run from `with.name`/`with.args`/`with.dir`/`with.timeout`. |
 | `exec` | `Command` | `CommandResult` | Runs the process; a non-zero exit code is data, a failure to start it is not. |
+| `exec.stdout` | `CommandResult` | `Bytes` | Extracts the output stream. |
+| `exec.stderr` | `CommandResult` | `Bytes` | Extracts the error stream. |
+| `exec.exit_code` | `CommandResult` | `Int` | Puts the exit code on an edge, which is what makes it data a workflow can read. |
 | `http.build` | (none) | `HTTPRequest` | Builds a request from `with.method`/`with.url`/`with.headers`/`with.body`; the URL is validated at compile time. |
 | `http.request` | `HTTPRequest` | `HTTPResponse` | Shared `http.Client`; a timeout is transient, a non-2xx status is data. |
 | `http.body` | `HTTPResponse` | `Bytes` | Extracts the body. |
+| `http.status` | `HTTPResponse` | `Int` | Puts the status code on an edge, which is what makes it data a workflow can read. |
+| `http.header` | `HTTPResponse` | `Text` | Reads one header by `with.name`; an absent one is an error unless `with.default` is set. |
+
+A node has one output, so a node producing several values bundles them into one
+type. The extractors above are what put an individual field back on an edge;
+without them the bundled values are unreachable.
 
 ## Performance
 

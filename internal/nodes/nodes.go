@@ -44,11 +44,17 @@ func Definitions() []node.Definition {
 	return []node.Definition{
 		value.Definition(),
 		jsonnode.DecodeDefinition(),
+		jsonnode.EncodeDefinition(),
 		condition.Definition(),
 		exec.CommandDefinition(),
 		exec.Definition(),
+		exec.StdoutDefinition(),
+		exec.StderrDefinition(),
+		exec.ExitCodeDefinition(),
 		httpnode.BuildDefinition(),
 		httpnode.RequestDefinition(),
 		httpnode.BodyDefinition(),
+		httpnode.StatusDefinition(),
+		httpnode.HeaderDefinition(),
 	}
 }

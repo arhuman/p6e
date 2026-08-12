@@ -265,19 +265,33 @@ input. Go cannot enforce this, so it is checkable instead: `p6e run
 
 ## Node catalogue
 
-Eight capabilities ship in V0. Three are sources (no inputs); five take exactly
-one input. None takes two, and none produces more than one output.
+Fourteen capabilities ship in V0. Three are sources (no inputs); eleven take
+exactly one input. None takes two, and none produces more than one output.
 
 | Capability | Input | Output | Configurable |
 |---|---|---|---|
 | [`value`](#value) | none (source) | `Bytes`, `Text`, `Bool` or `Int` | required |
 | [`json.decode`](#jsondecode) | `Bytes` | `JSONDocument` | rejected |
+| [`json.encode`](#jsonencode) | `JSONDocument` | `Bytes` | rejected |
 | [`condition`](#condition) | `JSONDocument` | `Bool` | required |
 | [`exec.command`](#execcommand) | none (source) | `Command` | required |
 | [`exec`](#exec) | `Command` | `CommandResult` | rejected |
+| [`exec.stdout`](#execstdout-execstderr-execexit_code) | `CommandResult` | `Bytes` | rejected |
+| [`exec.stderr`](#execstdout-execstderr-execexit_code) | `CommandResult` | `Bytes` | rejected |
+| [`exec.exit_code`](#execstdout-execstderr-execexit_code) | `CommandResult` | `Int` | rejected |
 | [`http.build`](#httpbuild) | none (source) | `HTTPRequest` | required |
 | [`http.request`](#httprequest) | `HTTPRequest` | `HTTPResponse` | optional |
 | [`http.body`](#httpbody) | `HTTPResponse` | `Bytes` | rejected |
+| [`http.status`](#httpstatus) | `HTTPResponse` | `Int` | rejected |
+| [`http.header`](#httpheader) | `HTTPResponse` | `Text` | required |
+
+**Extractors are load-bearing.** A node has exactly one output, so a node
+producing several values bundles them into one type: `CommandResult` carries
+three, `HTTPResponse` carries three. `exec.stdout`, `exec.exit_code`,
+`http.status`, `http.header` and `http.body` are what put an individual field on
+an edge. Without them those bundled values are unreachable and the nodes that
+produce them are dead ends, so these are not conveniences: they are how the
+catalogue connects to itself.
 
 ### `value`
 
@@ -330,6 +344,27 @@ are the problem, and the same bytes fail the same way, so retrying is pointless.
 
 This is the only place JSON appears in a running pipeline. JSON is what this node
 does, never what the engine does.
+
+### `json.encode`
+
+Encodes a document back to bytes.
+
+- **Input:** port `in`, `JSONDocument`.
+- **Output:** port `out`, `Bytes`.
+- **Configuration:** none. A `with` block is rejected.
+
+`json.decode`'s inverse, and the only way a pipeline can produce a JSON payload
+rather than only consume one.
+
+```yaml
+payload:
+  uses: json.encode
+  needs: [document]
+```
+
+**Run-time errors:** `unencodable` (`invalid_input`, not retryable). A document
+that came from `json.decode` always encodes; one assembled by another node need
+not, so the failure is reported rather than assumed away.
 
 ### `condition`
 
@@ -435,6 +470,10 @@ run:
 `Stderr`. Only the workflow knows whether a command that exits 1 is a problem. A
 node error means the process never ran, or was killed before it could finish.
 
+A node has one output, so all three fields arrive bundled in one
+`CommandResult`. `exec.stdout`, `exec.stderr` and `exec.exit_code` are what put
+each of them on an edge of its own.
+
 | Code | Kind | Retryable | When |
 |---|---|---|---|
 | `timeout` | `transient` | yes | The command outran its own `timeout`. |
@@ -449,6 +488,40 @@ its own budget is deliberate: the first is not worth retrying, the second may be
 After a kill, the engine waits a further 500ms grace. Without it, a backgrounded
 grandchild still holding the output pipe keeps the wait blocked, and a step's
 timeout would bound nothing.
+
+### `exec.stdout`, `exec.stderr`, `exec.exit_code`
+
+Read one field of a `CommandResult` onto an edge.
+
+| Capability | Input | Output |
+|---|---|---|
+| `exec.stdout` | `CommandResult` | `Bytes` |
+| `exec.stderr` | `CommandResult` | `Bytes` |
+| `exec.exit_code` | `CommandResult` | `Int` |
+
+All three take no configuration; a `with` block is rejected. None can fail.
+
+```yaml
+run:
+  uses: exec
+  needs: [cmd]
+
+output:
+  uses: exec.stdout
+  needs: [run]
+
+code:
+  uses: exec.exit_code
+  needs: [run]
+```
+
+`exec` bundles everything a process did into one value because a node has one
+output. These are what unbundle it, and without them nothing downstream can
+consume an `exec` step at all.
+
+The bytes are shared, not copied: `exec.stdout` points at the same backing array
+as the result, which is safe because values are immutable. Both extractors can
+read the same result concurrently, since fan-out shares one reference.
 
 ### `http.build`
 
@@ -506,8 +579,8 @@ fetch:
 
 **A non-2xx status is not a failure.** It arrives as `Response.Status` on a
 successful edge. Whether a 404 means the workflow failed is a decision only the
-workflow can make, typically with a `condition` step reading the field. A node
-error means no response was obtained at all.
+workflow can make, and `http.status` is what puts the code on an edge so it can
+make it. A node error means no response was obtained at all.
 
 | Code | Kind | Retryable | When |
 |---|---|---|---|
@@ -556,6 +629,66 @@ The body is shared, not copied: the `Bytes` it produces points at the same
 backing array as the response, which is safe because values are immutable.
 
 **Run-time errors:** none.
+
+### `http.status`
+
+Reads the status code onto an edge.
+
+- **Input:** port `in`, `HTTPResponse`.
+- **Output:** port `out`, `Int`.
+- **Configuration:** none. A `with` block is rejected.
+
+```yaml
+status:
+  uses: http.status
+  needs: [fetch]
+```
+
+This is what makes "a non-2xx status is data" usable. A 404 arrives as the
+integer 404, and the pipeline decides what that means.
+
+**Run-time errors:** none.
+
+### `http.header`
+
+Reads one response header onto an edge.
+
+- **Input:** port `in`, `HTTPResponse`.
+- **Output:** port `out`, `Text`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | Matched case insensitively. |
+| `default` | string | no | Produced when the response carries no such header. Declaring none makes an absent header an error. |
+
+```yaml
+content_type:
+  uses: http.header
+  needs: [fetch]
+  with: {name: Content-Type}
+
+retry_after:
+  uses: http.header
+  needs: [fetch]
+  with: {name: Retry-After, default: "0"}
+```
+
+Semantics worth knowing:
+
+- **A missing header is an error unless a default is declared.** There is no
+  optional `Text`, so producing `""` for an absent header would be
+  indistinguishable from a header that is genuinely empty, and that value would
+  flow on into a URL or a body unnoticed. Declaring the default makes the intent
+  explicit.
+- **An empty default is a real choice**, distinct from declaring none.
+- **A header present but empty is a value, not an absence.** The default does not
+  displace it.
+- **A header sent more than once yields its first value.** A pipeline that needs
+  all of them wants a different node rather than a surprising one.
+
+**Compile errors:** `missing_name` (`invalid_input`), plus strict field
+rejection. **Run-time errors:** `header_absent` (`permanent`, not retryable):
+the same response will not grow the header on a retry.
 
 ## Errors
 
