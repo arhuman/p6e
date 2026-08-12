@@ -153,8 +153,10 @@ step "paired": node "pair" has inputs of identical type Alpha ("in0", "in1"),
   so a positional swap would type check: bind needs by name instead
 ```
 
-**No built-in node has more than one input**, so this rule never fires against
-the bundled catalogue. It applies to nodes you add. See ADR 0002, ADR 0005 and
+The rule fires most often on [`text.format`](#textformat), whose ports are all
+`Text`, so any template with two or more placeholders must be bound by name. The
+other multi-input built-ins, `http.with_header` and `http.with_body`, take ports
+of distinct types and stay bindable either way. See ADR 0002, ADR 0005 and
 ADR 0009.
 
 ### Port names
@@ -167,10 +169,15 @@ in `internal/node` generate them:
 | `NewSource` | none | `out` |
 | `NewTypedNode` | `in` | `out` |
 | `NewTypedNode2` | `in0`, `in1` | `out` |
+| `NewTypedNodeN` | named by the node | `out` |
 
 So the named form of a single-input built-in is `needs: {in: fetch}`. It is
 legal and equivalent to `needs: [fetch]`, and it is not worth writing: a single
 port cannot be bound to the wrong thing.
+
+`NewTypedNodeN` is how a node's arity comes from its configuration, which is
+what lets `text.format` name a port after each placeholder in its template. Its
+ports all carry one type.
 
 ### What `needs` does not do
 
@@ -193,6 +200,13 @@ The `with` block is static. There is no interpolation, no expression language,
 and no `${{ steps.fetch.output }}`: data reaches a node through edges, and
 anything else would move type checking to run time, which is the thing this
 engine exists to avoid.
+
+Where a value has to be built from data, a node does it and the graph shows it:
+[`text.format`](#textformat) composes a string from typed input ports, and
+[`http.from_url`](#httpfrom_url), [`http.with_header`](#httpwith_header) and
+[`http.with_body`](#httpwith_body) assemble a request from edges. Those keep the
+convenience of interpolation while the compiler still checks every value's type
+and presence.
 
 ## `retry`
 
@@ -265,14 +279,16 @@ input. Go cannot enforce this, so it is checkable instead: `p6e run
 
 ## Node catalogue
 
-Fourteen capabilities ship in V0. Three are sources (no inputs); eleven take
-exactly one input. None takes two, and none produces more than one output.
+Twenty capabilities ship in V0. None produces more than one output.
 
 | Capability | Input | Output | Configurable |
 |---|---|---|---|
 | [`value`](#value) | none (source) | `Bytes`, `Text`, `Bool` or `Int` | required |
+| [`env.get`](#envget) | none (source) | `Text`, `Bytes`, `Bool` or `Int` | required |
+| [`text.format`](#textformat) | one `Text` per placeholder | `Text` | required |
 | [`json.decode`](#jsondecode) | `Bytes` | `JSONDocument` | rejected |
 | [`json.encode`](#jsonencode) | `JSONDocument` | `Bytes` | rejected |
+| [`json.get`](#jsonget) | `JSONDocument` | `Text`, `Bytes`, `Bool` or `Int` | required |
 | [`condition`](#condition) | `JSONDocument` | `Bool` | required |
 | [`exec.command`](#execcommand) | none (source) | `Command` | required |
 | [`exec`](#exec) | `Command` | `CommandResult` | rejected |
@@ -284,6 +300,9 @@ exactly one input. None takes two, and none produces more than one output.
 | [`http.body`](#httpbody) | `HTTPResponse` | `Bytes` | rejected |
 | [`http.status`](#httpstatus) | `HTTPResponse` | `Int` | rejected |
 | [`http.header`](#httpheader) | `HTTPResponse` | `Text` | required |
+| [`http.from_url`](#httpfrom_url) | `Text` | `HTTPRequest` | optional |
+| [`http.with_header`](#httpwith_header) | `HTTPRequest`, `Text` | `HTTPRequest` | required |
+| [`http.with_body`](#httpwith_body) | `HTTPRequest`, `Bytes` | `HTTPRequest` | rejected |
 
 **Extractors are load-bearing.** A node has exactly one output, so a node
 producing several values bundles them into one type: `CommandResult` carries
@@ -322,6 +341,126 @@ happens at compile time, before the graph is type checked.
 
 **Compile errors** (all `invalid_input`): `missing_type`, `unknown_type`,
 `missing_value`, `bad_literal`. **Run-time errors:** none.
+
+### `env.get`
+
+Reads an environment variable, so a pipeline can reach a token or an endpoint
+without hardcoding it.
+
+- **Kind:** source, no inputs.
+- **Output:** port `out`, of the type named in `with.as`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | The variable to read. |
+| `as` | string | yes | One of `Text`, `Bytes`, `Bool`, `Int`. Becomes the output type. |
+| `default` | string | no | Produced when the variable is unset. Declaring none makes an unset variable an error. |
+
+```yaml
+token:
+  uses: env.get
+  with:
+    name: GITHUB_TOKEN
+    as: Text
+```
+
+**The variable is read at execution, not at compile time.** That matters twice:
+`p6e check` stays runnable on a machine without the secrets present, and one
+compiled plan run in two environments sees each one's values rather than
+whichever was in scope when it compiled. It also keeps secrets out of the plan.
+
+Configuration is still validated at compile time, including whether a declared
+default parses as the declared type.
+
+**Compile errors** (all `invalid_input`): `missing_name`, `missing_type`,
+`unknown_type`, `bad_default`. **Run-time errors** (all `permanent`, not
+retryable): `env_absent` when unset with no default, `bad_value` when the value
+does not parse as the declared type. A set-but-unparseable value fails rather
+than falling back to the default: the default covers absence, not corruption.
+
+### `text.format`
+
+Builds a string from pipeline data. This is what a pipeline uses instead of
+interpolation in a `with` block.
+
+- **Input:** one `Text` port per placeholder, named after it.
+- **Output:** port `out`, `Text`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `template` | string | yes | Literal text with `{{name}}` placeholders. |
+
+```yaml
+url:
+  uses: text.format
+  with:
+    template: "https://api.github.com/repos/{{owner}}/{{name}}/releases"
+  needs:
+    owner: repo_owner
+    name: repo_name
+```
+
+The template is parsed at compile time and **its placeholders become the node's
+input ports**, in order of first appearance. That is what makes this
+interpolation the compiler checks: a placeholder with nothing bound to it is a
+compile error, and a `needs` entry naming a placeholder the template does not
+contain is too. Both are the ordinary named-binding checks, applied to ports
+that happen to have come from a string.
+
+Every port is a `Text`, so **a template with more than one placeholder cannot be
+bound positionally**: the rule above requires the mapping form exactly when
+ports share a type, and here they always do.
+
+Other semantics:
+
+- A name repeated in the template is **one port**, used at each occurrence.
+- Whitespace inside a placeholder is trimmed, so `{{ name }}` binds `name`.
+- A template with no placeholder is a constant, and legal.
+
+**Compile errors** (all `invalid_input`): `missing_template`, and `bad_template`
+for an unclosed `{{`, an empty placeholder, or whitespace inside one.
+**Run-time errors:** none.
+
+### `json.get`
+
+Reads a value out of a document, so it can be used rather than only tested.
+
+- **Input:** port `in`, `JSONDocument`.
+- **Output:** port `out`, of the type named in `with.as`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `path` | string | yes | Dot-separated, as `condition`'s is. |
+| `as` | string | yes | One of `Text`, `Bytes`, `Bool`, `Int`. Becomes the output type. |
+| `default` | scalar | no | Produced when the path is absent. Declaring none makes an absent path an error. |
+
+```yaml
+owner:
+  uses: json.get
+  needs: [document]
+  with:
+    path: repo.owner
+    as: Text
+```
+
+`condition` answers a question about a document; this reads a value out of one.
+The declared type becomes the step's output type, which is what keeps extraction
+statically typed without a structural type system: the pipeline states the type
+it expects, and the compiler checks every use of it.
+
+**Conversion is explicit and never coerces.** A JSON string does not satisfy
+`as: Int`, and a JSON number does not satisfy `as: Text`. A JSON number does
+satisfy `as: Int` when it has no fractional part, because JSON has no integer
+type of its own.
+
+A declared default is converted at compile time by the same rules, so a default
+that does not fit `as` fails `p6e check`. It covers an **absent path only**: a
+path that exists but holds the wrong type is a mismatch, not an absence, and
+fails rather than falling back.
+
+**Compile errors** (all `invalid_input`): `missing_path`, `bad_path`,
+`missing_type`, `unknown_type`, `bad_default`. **Run-time errors** (all
+`invalid_input`, not retryable): `path_absent`, `type_mismatch`.
 
 ### `json.decode`
 
@@ -690,6 +829,87 @@ Semantics worth knowing:
 rejection. **Run-time errors:** `header_absent` (`permanent`, not retryable):
 the same response will not grow the header on a retry.
 
+### `http.from_url`
+
+Builds a request whose URL comes from an edge rather than a `with` block.
+
+- **Input:** port `in`, `Text`.
+- **Output:** port `out`, `HTTPRequest`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `method` | string | no | Defaults to `GET`. Upper-cased. |
+
+```yaml
+request:
+  uses: http.from_url
+  needs: [computed_url]
+```
+
+`http.build` fixes its URL when the pipeline is written, which is right when the
+URL is known then and wrong the moment it comes from data. A request with a
+computed URL starts here, and `http.with_header` and `http.with_body` add to it.
+
+**The trade is explicit.** `http.build` validates its URL at compile time, and a
+URL arriving on an edge cannot be validated until it arrives. Static *type*
+checking is unaffected; what is given up is static *value* checking of the URL,
+and only for steps that opt into a computed one. The check still happens, as an
+`invalid_input` failure at the step that produced the bad URL rather than
+somewhere downstream.
+
+**Run-time errors:** `missing_url`, `bad_url` (both `invalid_input`, not
+retryable).
+
+### `http.with_header`
+
+Sets one header on a request, taking the value from an edge.
+
+- **Inputs:** port `in0`, `HTTPRequest`; port `in1`, `Text`.
+- **Output:** port `out`, `HTTPRequest`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | The header to set. The value comes from the second input. |
+
+```yaml
+authorized:
+  uses: http.with_header
+  with: {name: Authorization}
+  needs: [request, token]
+```
+
+The name is configuration because it is known when the pipeline is written; the
+value is an input because it is not. An existing header of the same name is
+replaced, and names are canonicalised, so setting `content-type` over a request
+carrying `Content-Type` replaces it rather than producing both.
+
+**It produces a new request rather than modifying the one it received**, because
+values on edges are immutable. That matters twice here: the request it consumes
+may fan out to a sibling step, and a retried attempt receives the same input as
+the first.
+
+**Compile errors:** `missing_name` (`invalid_input`). **Run-time errors:** none.
+
+### `http.with_body`
+
+Sets the body of a request from an edge.
+
+- **Inputs:** port `in0`, `HTTPRequest`; port `in1`, `Bytes`.
+- **Output:** port `out`, `HTTPRequest`.
+- **Configuration:** none. A `with` block is rejected.
+
+```yaml
+final:
+  uses: http.with_body
+  needs: [authorized, payload]
+```
+
+The body is not wrapped, encoded, or given a content type: pairing this with
+`http.with_header` is how a pipeline says what the bytes are. Like
+`http.with_header` it produces a new request rather than modifying its input.
+
+**Run-time errors:** none.
+
 ## Errors
 
 Every node failure is a `NodeError` with a fixed vocabulary, never a panic used
@@ -852,10 +1072,11 @@ compiles, because a missing path is a verdict rather than an error. Change
 `needs: [fetch]` on `document` to skip `http.body` and it does not, because
 `json.decode` takes `Bytes` and `fetch` produces `HTTPResponse`.
 
-The other bundled examples are `examples/json.yaml` (fan-out to three
-conditions sharing one decoded document), `examples/exec.yaml` (running a local
-process), and `examples/broken.yaml` (a deliberate one-character type error, to
-show what rejection looks like).
+The other bundled examples are `examples/chaining.yaml` (using one call's result
+to build the next, with a computed URL and a token from the environment),
+`examples/json.yaml` (fan-out to three conditions sharing one decoded document),
+`examples/exec.yaml` (running a local process), and `examples/broken.yaml` (a
+deliberate one-character type error, to show what rejection looks like).
 
 ## See also
 

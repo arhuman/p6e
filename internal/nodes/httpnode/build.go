@@ -43,7 +43,7 @@ func BuildDefinition() node.Definition {
 				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
 					"invalid %s configuration", BuildName)
 			}
-			if err := validateURL(c.URL); err != nil {
+			if err := validateURL(BuildName, c.URL); err != nil {
 				return nil, err
 			}
 
@@ -66,9 +66,13 @@ func BuildDefinition() node.Definition {
 	}
 }
 
-func validateURL(raw string) *node.NodeError {
+// validateURL is shared by http.build, which checks its configured URL at
+// compile time, and http.from_url, which checks an arriving one at execution.
+// capability names the node in the error, since the two report the same problem
+// at different moments.
+func validateURL(capability, raw string) *node.NodeError {
 	if raw == "" {
-		return node.Errf(node.KindInvalidInput, "missing_url", "%s requires a url", BuildName)
+		return node.Errf(node.KindInvalidInput, "missing_url", "%s requires a url", capability)
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {

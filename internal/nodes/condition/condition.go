@@ -8,12 +8,15 @@ package condition
 
 import (
 	"context"
-	"strings"
 
 	"github.com/arhuman/p6e/internal/node"
+	"github.com/arhuman/p6e/internal/nodes/jsonpath"
 	"github.com/arhuman/p6e/internal/nodes/types"
 	"gopkg.in/yaml.v3"
 )
+
+// Name is the capability a pipeline references with "uses: condition".
+const Name = "condition"
 
 // config is the with block: a dot-separated path plus exactly one test.
 //
@@ -43,7 +46,7 @@ func newNode(cfg node.Config) (node.RuntimeNode, error) {
 	if err := cfg.Decode(&c); err != nil {
 		return nil, err
 	}
-	path, err := parsePath(c.Path)
+	path, err := jsonpath.Parse(Name, c.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +62,7 @@ func newNode(cfg node.Config) (node.RuntimeNode, error) {
 	case c.Exists != nil:
 		want := *c.Exists
 		return verdict(func(root any) bool {
-			_, found := lookup(root, path)
+			_, found := jsonpath.Lookup(root, path)
 			return found == want
 		}), nil
 	}
@@ -76,7 +79,7 @@ func newNode(cfg node.Config) (node.RuntimeNode, error) {
 			"equals is not a usable scalar")
 	}
 	return verdict(func(root any) bool {
-		got, found := lookup(root, path)
+		got, found := jsonpath.Lookup(root, path)
 		return found && equal(want, got)
 	}), nil
 }
@@ -86,39 +89,6 @@ func verdict(test func(root any) bool) node.RuntimeNode {
 		func(_ context.Context, _ *node.ExecutionContext, doc *types.Document) node.Result[*types.Bool] {
 			return node.Ok(&types.Bool{Value: test(doc.Root)})
 		})
-}
-
-func parsePath(raw string) ([]string, error) {
-	if raw == "" {
-		return nil, node.Errf(node.KindInvalidInput, "missing_path",
-			"condition requires a path such as \"user.name\"")
-	}
-	segments := strings.Split(raw, ".")
-	for _, s := range segments {
-		if s == "" {
-			return nil, node.Errf(node.KindInvalidInput, "bad_path",
-				"path %q has an empty segment", raw)
-		}
-	}
-	return segments, nil
-}
-
-// lookup walks the document by map key. A key that is absent, or a value part
-// way down that is not an object, means the path does not exist. Neither is an
-// error: not existing is one of the answers the node reports.
-func lookup(root any, path []string) (any, bool) {
-	current := root
-	for _, key := range path {
-		m, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		current, ok = m[key]
-		if !ok {
-			return nil, false
-		}
-	}
-	return current, true
 }
 
 // equal compares the configured literal with the value found in the document.

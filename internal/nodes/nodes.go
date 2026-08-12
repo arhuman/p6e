@@ -12,9 +12,11 @@ import (
 
 	"github.com/arhuman/p6e/internal/node"
 	"github.com/arhuman/p6e/internal/nodes/condition"
+	"github.com/arhuman/p6e/internal/nodes/env"
 	"github.com/arhuman/p6e/internal/nodes/exec"
 	"github.com/arhuman/p6e/internal/nodes/httpnode"
 	"github.com/arhuman/p6e/internal/nodes/jsonnode"
+	"github.com/arhuman/p6e/internal/nodes/text"
 	"github.com/arhuman/p6e/internal/nodes/value"
 )
 
@@ -43,8 +45,11 @@ func Registry() *node.Registry {
 func Definitions() []node.Definition {
 	return []node.Definition{
 		value.Definition(),
+		env.Definition(),
+		text.FormatDefinition(),
 		jsonnode.DecodeDefinition(),
 		jsonnode.EncodeDefinition(),
+		jsonnode.GetDefinition(),
 		condition.Definition(),
 		exec.CommandDefinition(),
 		exec.Definition(),
@@ -56,5 +61,8 @@ func Definitions() []node.Definition {
 		httpnode.BodyDefinition(),
 		httpnode.StatusDefinition(),
 		httpnode.HeaderDefinition(),
+		httpnode.FromURLDefinition(),
+		httpnode.WithHeaderDefinition(),
+		httpnode.WithBodyDefinition(),
 	}
 }

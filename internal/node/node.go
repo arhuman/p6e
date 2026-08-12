@@ -75,6 +75,33 @@ func NewTypedNode2[I1, I2, O any](name string, fn func(context.Context, *Executi
 	}
 }
 
+// NewTypedNodeN adapts a node whose arity comes from its configuration: any
+// number of inputs, all of one type, with port names supplied by the caller.
+// It is the general form of NewTypedNode2, for nodes such as a template with
+// one port per placeholder.
+//
+// Every port carries the same type, which is what lets one slice hold them. A
+// node mixing input types needs its own adapter.
+//
+// Port names are the pipeline-facing contract: they are what a step's named
+// needs mapping binds against, and because the ports share a type, ADR 0009
+// requires that mapping whenever there is more than one.
+func NewTypedNodeN[I, O any](name string, ports []string, fn func(context.Context, *ExecutionContext, []I) Result[O]) RuntimeNode {
+	typ := TypeOf[I]()
+	inputs := make([]PortDescriptor, len(ports))
+	for i, p := range ports {
+		inputs[i] = PortDescriptor{Name: p, Type: typ}
+	}
+	return &typedNodeN[I, O]{
+		desc: Descriptor{
+			Name:   name,
+			Inputs: inputs,
+			Output: PortDescriptor{Name: "out", Type: TypeOf[O]()},
+		},
+		fn: fn,
+	}
+}
+
 type sourceNode[O any] struct {
 	desc Descriptor
 	fn   func(context.Context, *ExecutionContext) Result[O]
@@ -127,6 +154,30 @@ func (n *typedNode2[I1, I2, O]) Execute(ctx context.Context, ec *ExecutionContex
 		return ResultValue{Err: typeError(&n.desc, 1, inputs[1].typ)}
 	}
 	return erase(n.fn(ctx, ec, in0, in1), n.desc.Output.Type)
+}
+
+type typedNodeN[I, O any] struct {
+	desc Descriptor
+	fn   func(context.Context, *ExecutionContext, []I) Result[O]
+}
+
+func (n *typedNodeN[I, O]) Descriptor() Descriptor { return n.desc }
+
+func (n *typedNodeN[I, O]) Execute(ctx context.Context, ec *ExecutionContext, inputs []Value) ResultValue {
+	if len(inputs) != len(n.desc.Inputs) {
+		return ResultValue{Err: arityError(&n.desc, len(inputs))}
+	}
+	// One slice per call, because the typed values cannot alias the erased
+	// ones. A node's arity here is a handful of ports, not a hot-path array.
+	args := make([]I, len(inputs))
+	for i := range inputs {
+		in, ok := inputs[i].ref.(I)
+		if !ok {
+			return ResultValue{Err: typeError(&n.desc, i, inputs[i].typ)}
+		}
+		args[i] = in
+	}
+	return erase(n.fn(ctx, ec, args), n.desc.Output.Type)
 }
 
 // erase converts a typed result back into the plan's currency. The output

@@ -177,8 +177,11 @@ the workflow failed is a decision only the workflow can make, typically with a
 | Capability | Input | Output | Notes |
 |---|---|---|---|
 | `value` | (none) | `Bytes`, `Text`, `Bool`, or `Int` | Constant from `with.type` and `with.value`. |
+| `env.get` | (none) | `Text`, `Bytes`, `Bool`, or `Int` | Environment variable named by `with.name`, read at execution so `check` needs no secrets. |
+| `text.format` | one `Text` per placeholder | `Text` | Interpolation the compiler checks: `with.template`'s `{{name}}` placeholders become input ports. |
 | `json.decode` | `Bytes` | `JSONDocument` | Malformed input is `invalid_input`, not retryable. |
 | `json.encode` | `JSONDocument` | `Bytes` | The inverse, so a pipeline can produce a payload and not only consume one. |
+| `json.get` | `JSONDocument` | `Text`, `Bytes`, `Bool`, or `Int` | Reads `with.path` as the type `with.as` names; never coerces. |
 | `condition` | `JSONDocument` | `Bool` | Tests a path with `equals` or `exists`; no branching in V0. |
 | `exec.command` | (none) | `Command` | Builds a command to run from `with.name`/`with.args`/`with.dir`/`with.timeout`. |
 | `exec` | `Command` | `CommandResult` | Runs the process; a non-zero exit code is data, a failure to start it is not. |
@@ -190,10 +193,19 @@ the workflow failed is a decision only the workflow can make, typically with a
 | `http.body` | `HTTPResponse` | `Bytes` | Extracts the body. |
 | `http.status` | `HTTPResponse` | `Int` | Puts the status code on an edge, which is what makes it data a workflow can read. |
 | `http.header` | `HTTPResponse` | `Text` | Reads one header by `with.name`; an absent one is an error unless `with.default` is set. |
+| `http.from_url` | `Text` | `HTTPRequest` | A request whose URL comes from an edge; the URL is checked on arrival rather than at compile time. |
+| `http.with_header` | `HTTPRequest`, `Text` | `HTTPRequest` | Sets `with.name` from an edge, producing a new request. |
+| `http.with_body` | `HTTPRequest`, `Bytes` | `HTTPRequest` | Sets the body from an edge, producing a new request. |
 
 A node has one output, so a node producing several values bundles them into one
 type. The extractors above are what put an individual field back on an edge;
 without them the bundled values are unreachable.
+
+Nothing interpolates. Where a value has to be built from data, a node builds it
+and the graph shows it: `text.format` composes a string from typed ports, and
+the `http.from_url`/`with_header`/`with_body` trio assembles a request from
+edges. That keeps the convenience of `${{ ... }}` while the compiler still
+checks every value's type and presence (ADR 0010).
 
 ## Performance
 
@@ -258,6 +270,8 @@ on.
   binds by input port name.
 - `docs/adr/0009-mandatory-named-binding.md`: why that mapping form is required
   when a node's input ports are not pairwise type-distinct.
+- `docs/adr/0010-data-dependent-values.md`: how a pipeline builds strings and
+  requests from data without an expression language.
 - `docs/adr/0003-v0-baseline-performance.md`: the measurements behind the
   Performance section above.
 

@@ -1,0 +1,81 @@
+# Use the result of one call to build the next one.
+#
+# This is the shape most real integrations have, and the one the engine could
+# not express before it had json.get, text.format and http.from_url: every
+# request used to be fixed in a with block when the pipeline was written.
+#
+# Nothing here interpolates. The URL is built by a node whose input ports come
+# from its template, so a missing value is a compile error rather than an empty
+# string in a URL. Because those ports are all Text, the named needs form is not
+# a style choice: the compiler requires it (ADR 0009), which is why "owner" and
+# "name" are bound by name below.
+#
+# p6e check validates this offline. p6e run performs no network call either: it
+# stops at the assembled request, since nothing consumes it.
+
+version: 1
+
+steps:
+  # Stands in for an upstream response. Replace with http.request to make it one.
+  raw:
+    uses: value
+    with:
+      type: Bytes
+      value: '{"repo": {"owner": "golang", "name": "go"}, "stars": 128000}'
+
+  doc:
+    uses: json.decode
+    needs: [raw]
+
+  # Reading a document rather than only testing it. The declared type becomes
+  # this step's output type, so the rest of the graph is checked against it.
+  owner:
+    uses: json.get
+    needs: [doc]
+    with:
+      path: repo.owner
+      as: Text
+
+  name:
+    uses: json.get
+    needs: [doc]
+    with:
+      path: repo.name
+      as: Text
+
+  url:
+    uses: text.format
+    with:
+      template: "https://api.github.com/repos/{{owner}}/{{name}}/releases"
+    needs:
+      owner: owner
+      name: name
+
+  # http.build fixes its URL at compile time; this takes one from an edge. The
+  # URL is still checked, at the step that produced it rather than downstream.
+  request:
+    uses: http.from_url
+    needs: [url]
+
+  # Read at execution, so p6e check runs on a machine without the secret and one
+  # compiled plan can serve two environments.
+  token:
+    uses: env.get
+    with:
+      name: P6E_TOKEN
+      as: Text
+      default: anonymous
+
+  authorized:
+    uses: http.with_header
+    with:
+      name: Authorization
+    needs: [request, token]
+
+  body:
+    uses: json.encode
+    needs: [doc]
+
+  final:
+    uses: http.with_body
+    needs: [authorized, body]
