@@ -238,6 +238,8 @@ on.
 
 ## Documentation
 
+- `docs/pipeline.md`: the pipeline file format in full, and a reference for
+  every built-in node: its inputs, output, configuration, and errors.
 - `docs/adr/0001-type-bridge.md`: why nodes exchange pointer payloads through
   an erased runtime adapter rather than reflection or compile-time fusion.
 - `docs/adr/0002-input-binding.md`: why `needs` binds positionally to a node's
