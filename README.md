@@ -206,6 +206,18 @@ spawning one; it is not built yet, in favor of the current single-owner
 executor design that is race-free by construction. See ADR 0003 for the full
 measurement set and the reasoning.
 
+## Adding a node
+
+Nodes are added in-tree: register a `node.Definition` in `internal/nodes` and it
+is available to every pipeline, with no engine change of any kind. The eight
+built-ins were written against exactly the interface described above.
+
+Out-of-tree authoring is not possible yet, because every package is under
+`internal/`. That is deliberate and temporary: three parts of the contract are
+expected to change (multi-output ports, arity beyond two, interface-typed
+compatibility), and exporting them first would mean breaking anyone who built on
+them. ADR 0007 records the reasoning and the trigger for revisiting it.
+
 ## Status and non-goals
 
 V0, under active development; see `PLAN.md`. Deliberately absent: an

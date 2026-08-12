@@ -480,3 +480,47 @@ func TestNeedsRejectsUnusableForms(t *testing.T) {
 		}
 	}
 }
+
+// A typo in one step's with block used to hide a type error in another, because
+// compilation returned after the first phase that found anything.
+func TestCompileReportsProblemsFromDifferentPhasesTogether(t *testing.T) {
+	got := problems(t, `
+version: 1
+steps:
+  source:
+    uses: make.alpha
+  misconfigured:
+    uses: picky
+    with:
+      mode: sideways
+  mistyped:
+    uses: alpha.bump
+    needs: [convert]
+  convert:
+    uses: alpha.to.beta
+    needs: [source]
+`)
+
+	if !strings.Contains(got, "sideways") {
+		t.Errorf("problems = %q, should report the bad configuration", got)
+	}
+	if !strings.Contains(got, `input "in" expects Alpha`) {
+		t.Errorf("problems = %q, should also report the type error in another step", got)
+	}
+}
+
+// A step naming a missing dependency must not also produce a bogus type error
+// against whichever step happens to sit at index zero.
+func TestMissingDependencyDoesNotProduceASpuriousTypeError(t *testing.T) {
+	got := problems(t, `
+version: 1
+steps:
+  bump:
+    uses: alpha.bump
+    needs: [ghost]
+`)
+
+	if strings.Contains(got, "expects") {
+		t.Errorf("problems = %q, should report only the missing dependency", got)
+	}
+}

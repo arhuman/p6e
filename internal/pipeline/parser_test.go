@@ -182,3 +182,36 @@ func TestStepConfigEmptyLeavesZeroValue(t *testing.T) {
 		t.Error("decoding an absent with block overwrote the caller's defaults")
 	}
 }
+
+func TestParseRejectsExcessiveRetryAttempts(t *testing.T) {
+	_, err := parseString(t, "version: 1\nsteps:\n  a:\n    uses: x\n    retry:\n      max_attempts: 1000000\n")
+
+	if err == nil {
+		t.Fatal("expected an upper bound on max_attempts")
+	}
+	if !strings.Contains(err.Error(), "100") {
+		t.Errorf("err = %v, should name the limit", err)
+	}
+}
+
+func TestParseAcceptsTheRetryLimit(t *testing.T) {
+	mustParse(t, "version: 1\nsteps:\n  a:\n    uses: x\n    retry:\n      max_attempts: 100\n")
+}
+
+// A silently truncated pipeline would compile into a different, smaller graph,
+// so an oversized document is an error rather than a cut.
+func TestParseRejectsOversizedInput(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("version: 1\nsteps:\n")
+	for sb.Len() <= MaxPipelineBytes {
+		sb.WriteString("  step_with_a_reasonably_long_name_to_get_there_faster:\n    uses: x\n")
+	}
+
+	_, err := parseString(t, sb.String())
+	if err == nil {
+		t.Fatal("expected an oversized pipeline to be rejected")
+	}
+	if !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("err = %v, should explain the size limit", err)
+	}
+}

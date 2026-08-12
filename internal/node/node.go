@@ -10,6 +10,11 @@ import "context"
 // value costs 16ns per edge, more than the rest of the adapter put together
 // (ADR 0001). The executor owns one per step and updates Attempt between
 // attempts, which are sequential, so a node never sees it change underfoot.
+//
+// The pointer is valid only for the duration of the Execute call. A node must
+// not retain it: the executor writes Attempt before the next attempt, so a
+// goroutine the node left running would race with that write and read an
+// attempt number belonging to a later try. Copy any field you need to keep.
 type ExecutionContext struct {
 	WorkflowID  string
 	ExecutionID string

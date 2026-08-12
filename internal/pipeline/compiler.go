@@ -53,26 +53,19 @@ func Compile(f *File, reg *node.Registry, name string) (*ExecutionPlan, error) {
 		c.index[id] = i
 	}
 
-	// Resolution and dependency existence come first: the later phases index
-	// into resolved nodes and would report noise without them.
+	// Every phase runs, and each skips only the steps it genuinely cannot judge:
+	// a step whose node failed to resolve has no descriptor to type check
+	// against, but its neighbours still do. Returning after the first phase that
+	// found anything would hide a type error behind an unrelated typo in a with
+	// block, which defeats the point of collecting problems at all.
 	c.resolve()
 	c.checkDependencies()
-	if len(c.problems) > 0 {
-		return nil, &CompileError{Problems: c.problems}
-	}
-
-	// A cycle makes the type check non-terminating in the general case and its
-	// output meaningless, so it gates what follows.
 	c.checkCycles()
-	if len(c.problems) > 0 {
-		return nil, &CompileError{Problems: c.problems}
-	}
-
 	c.checkEdges()
+
 	if len(c.problems) > 0 {
 		return nil, &CompileError{Problems: c.problems}
 	}
-
 	return c.plan(name), nil
 }
 
@@ -145,7 +138,10 @@ func (c *compiler) checkCycles() {
 		color[i] = grey
 		path = append(path, i)
 		for _, dep := range c.file.Steps[c.ids[i]].Needs.Steps() {
-			j := c.index[dep]
+			j, ok := c.index[dep]
+			if !ok {
+				continue // checkDependencies already reported it
+			}
 			switch color[j] {
 			case grey:
 				c.reportCycle(path, j)
@@ -191,6 +187,12 @@ func (c *compiler) checkEdges() {
 
 	for i, id := range c.ids {
 		step := c.file.Steps[id]
+		// A step whose node did not resolve has no ports to check against, and
+		// one that names a missing step has nothing to check on the other end.
+		// Both were already reported; checking anyway would only add noise.
+		if c.nodes[i] == nil || !c.dependenciesResolve(step) {
+			continue
+		}
 		desc := c.nodes[i].Descriptor()
 
 		deps, ok := c.resolveNeeds(id, step, desc)
@@ -200,6 +202,9 @@ func (c *compiler) checkEdges() {
 		c.deps[i] = deps
 
 		for port, dep := range deps {
+			if c.nodes[dep] == nil {
+				continue
+			}
 			want := desc.Inputs[port].Type
 			got := c.nodes[dep].Descriptor().Output.Type
 			if want != got {
@@ -208,6 +213,16 @@ func (c *compiler) checkEdges() {
 			}
 		}
 	}
+}
+
+// dependenciesResolve reports whether every step this one names exists.
+func (c *compiler) dependenciesResolve(step Step) bool {
+	for _, dep := range step.Needs.Steps() {
+		if _, ok := c.index[dep]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveNeeds turns either needs form into dependency indices ordered by input

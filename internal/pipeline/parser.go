@@ -13,6 +13,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// MaxPipelineBytes caps how much of a pipeline document Parse will read. A
+// hand-written pipeline is kilobytes; the limit exists so that reading from an
+// untrusted or unbounded source cannot exhaust memory, which matters the moment
+// p6e is embedded in anything other than a CLI.
+const MaxPipelineBytes = 1 << 20
+
 // Parse reads a pipeline document. Decoding is strict: an unknown field is an
 // error, because a typo that is silently ignored produces a pipeline that
 // compiles and then does the wrong thing.
@@ -20,8 +26,19 @@ import (
 // Parse checks only what the document says about itself. Whether the nodes
 // exist, whether the graph is acyclic, and whether the types line up are the
 // compiler's business.
+//
+// Input longer than MaxPipelineBytes is an error rather than a truncation: a
+// silently truncated pipeline would compile into a different, smaller graph.
 func Parse(r io.Reader) (*File, error) {
-	dec := yaml.NewDecoder(r)
+	data, err := io.ReadAll(io.LimitReader(r, MaxPipelineBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading pipeline: %w", err)
+	}
+	if len(data) > MaxPipelineBytes {
+		return nil, fmt.Errorf("pipeline is larger than %d bytes", MaxPipelineBytes)
+	}
+
+	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 
 	var f File
@@ -37,13 +54,16 @@ func Parse(r io.Reader) (*File, error) {
 	return &f, nil
 }
 
-// ParseFile reads a pipeline document from disk.
+// ParseFile reads a pipeline document from disk. It streams through Parse rather
+// than reading the file whole, so the size limit applies here too.
 func ParseFile(path string) (*File, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := Parse(bytes.NewReader(data))
+	defer func() { _ = file.Close() }()
+
+	f, err := Parse(file)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -67,8 +87,18 @@ func (f *File) validate() error {
 		if step.Uses == "" {
 			return fmt.Errorf("step %q: missing uses", id)
 		}
-		if step.Retry != nil && step.Retry.MaxAttempts < 1 {
-			return fmt.Errorf("step %q: retry.max_attempts must be at least 1, got %d", id, step.Retry.MaxAttempts)
+		if step.Retry != nil {
+			if step.Retry.MaxAttempts < 1 {
+				return fmt.Errorf("step %q: retry.max_attempts must be at least 1, got %d", id, step.Retry.MaxAttempts)
+			}
+			// An unbounded attempt count with a doubling backoff is a way to
+			// occupy a concurrency slot for hours, and nothing legitimate wants
+			// it: a step that fails this many times needs a person, not another
+			// attempt.
+			if step.Retry.MaxAttempts > MaxRetryAttempts {
+				return fmt.Errorf("step %q: retry.max_attempts must be at most %d, got %d",
+					id, MaxRetryAttempts, step.Retry.MaxAttempts)
+			}
 		}
 		if slices.Contains(step.Needs.Steps(), id) {
 			return fmt.Errorf("step %q needs itself", id)

@@ -11,6 +11,9 @@ import (
 // Version is the only pipeline schema version V0 understands.
 const Version = 1
 
+// MaxRetryAttempts caps a step's retry policy.
+const MaxRetryAttempts = 100
+
 // File is a parsed pipeline document, before any resolution or type checking.
 // It mirrors the YAML one-to-one and knows nothing about nodes.
 type File struct {
