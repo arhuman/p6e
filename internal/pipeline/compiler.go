@@ -227,9 +227,22 @@ func (c *compiler) dependenciesResolve(step Step) bool {
 
 // resolveNeeds turns either needs form into dependency indices ordered by input
 // port, which is what the rest of the compiler and the executor work with.
+//
+// The list form is rejected for a node whose input ports are not pairwise
+// type-distinct: that is the one shape where a swapped list type checks and
+// silently means something else, so the mapping form is mandatory there.
 func (c *compiler) resolveNeeds(id string, step Step, desc node.Descriptor) ([]int, bool) {
 	if step.Needs.Named() {
 		return c.resolveNamedNeeds(id, step, desc)
+	}
+
+	// Checked before arity, because a node whose ports are not pairwise
+	// type-distinct needs the mapping form whatever the list contains. Reporting
+	// a count first would send the author back to a form they cannot use.
+	if typ, names, ambiguous := desc.AmbiguousInputs(); ambiguous {
+		c.fail(id, "node %q has inputs of identical type %s (%s), so a positional swap would type check: bind needs by name instead",
+			step.Uses, typ, names)
+		return nil, false
 	}
 
 	list := step.Needs.Positional()

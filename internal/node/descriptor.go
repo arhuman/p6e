@@ -34,9 +34,39 @@ func (d Descriptor) InputNames() string {
 	if len(d.Inputs) == 0 {
 		return "none"
 	}
-	parts := make([]string, len(d.Inputs))
+	names := make([]string, len(d.Inputs))
 	for i, p := range d.Inputs {
-		parts[i] = strconv.Quote(p.Name)
+		names[i] = p.Name
+	}
+	return quoteNames(names)
+}
+
+// AmbiguousInputs reports whether two input ports share a type, and renders
+// their names for an error message.
+//
+// This is the one binding mistake the type check cannot catch: when two ports
+// have the same type, both orders of a positional needs list type check and
+// mean different things. The compiler uses this to require the named form for
+// such a node, so the ambiguity is unreachable rather than merely documented.
+func (d Descriptor) AmbiguousInputs() (TypeID, string, bool) {
+	byType := make(map[TypeID][]string, len(d.Inputs))
+	for _, p := range d.Inputs {
+		byType[p.Type] = append(byType[p.Type], p.Name)
+	}
+	// Ranging over Inputs rather than the map keeps the report deterministic:
+	// the first duplicated type in port order always wins.
+	for _, p := range d.Inputs {
+		if names := byType[p.Type]; len(names) > 1 {
+			return p.Type, quoteNames(names), true
+		}
+	}
+	return "", "", false
+}
+
+func quoteNames(names []string) string {
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = strconv.Quote(n)
 	}
 	return strings.Join(parts, ", ")
 }

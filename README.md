@@ -73,7 +73,8 @@ A pipeline has two phases: compile, then run. Compiling turns a YAML file into
 an `ExecutionPlan`: it resolves every `uses` name against the node registry,
 checks that dependencies exist, detects cycles, binds each step's `needs` to its
 node's declared input ports (a list binds positionally, a mapping binds by port
-name: ADR 0002 and ADR 0005), checks that the
+name, and the mapping is mandatory when two ports share a type: ADR 0002, 0005
+and 0009), checks that the
 type each edge carries matches what the consuming port expects, and decodes
 each step's `with` block into the node's config, rejecting unknown fields.
 Anything checkable before execution is checked here; the executor consumes a
@@ -241,6 +242,10 @@ on.
   an erased runtime adapter rather than reflection or compile-time fusion.
 - `docs/adr/0002-input-binding.md`: why `needs` binds positionally to a node's
   input ports.
+- `docs/adr/0005-named-input-binding.md`: the mapping form of `needs`, which
+  binds by input port name.
+- `docs/adr/0009-mandatory-named-binding.md`: why that mapping form is required
+  when a node's input ports are not pairwise type-distinct.
 - `docs/adr/0003-v0-baseline-performance.md`: the measurements behind the
   Performance section above.
 

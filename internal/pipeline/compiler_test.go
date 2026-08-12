@@ -388,9 +388,9 @@ steps:
 			first.Steps[a].Deps, swapped.Steps[b].Deps)
 	}
 
-	// The positional equivalent of the same swap does change meaning, which is
-	// exactly why the named form was added.
-	positional := mustCompile(t, `
+	// The positional equivalent is not merely worse, it is rejected: a node
+	// whose ports share a type can only be bound by name (ADR 0009).
+	got := problems(t, `
 version: 1
 steps:
   left:
@@ -402,9 +402,45 @@ steps:
     uses: pair
     needs: [right, left]
 `)
-	c, _ := positional.StepIndex("paired")
-	if positional.Steps[c].Deps[0] == first.Steps[a].Deps[0] {
-		t.Error("the positional swap should have produced a different binding")
+	if !strings.Contains(got, `bind needs by name instead`) {
+		t.Errorf("positional binding of same-typed ports should be rejected, got:\n%s", got)
+	}
+}
+
+// The rule is about ambiguity, not arity: a fan-in whose ports have distinct
+// types is still bindable positionally, because the type check catches a swap.
+func TestPositionalBindingSurvivesDistinctTypes(t *testing.T) {
+	mustCompile(t, `
+version: 1
+steps:
+  source:
+    uses: make.alpha
+  convert:
+    uses: alpha.to.beta
+    needs: [source]
+  joined:
+    uses: join
+    needs: [source, convert]
+`)
+}
+
+// A node with ambiguous ports needs the mapping form whatever the list says, so
+// the count is not what gets reported.
+func TestAmbiguousInputsReportedBeforeArity(t *testing.T) {
+	got := problems(t, `
+version: 1
+steps:
+  left:
+    uses: make.alpha
+  paired:
+    uses: pair
+    needs: [left]
+`)
+	if !strings.Contains(got, `has inputs of identical type Alpha ("in0", "in1")`) {
+		t.Errorf("want the ambiguity reported, got:\n%s", got)
+	}
+	if strings.Contains(got, "needs lists") {
+		t.Errorf("want the ambiguity reported instead of the count, got:\n%s", got)
 	}
 }
 

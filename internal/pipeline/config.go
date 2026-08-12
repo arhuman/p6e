@@ -57,7 +57,9 @@ var DefaultRetry = Retry{MaxAttempts: 1}
 // The positional form is the original and stays the idiom for single-input
 // steps, where there is nothing to confuse. The named form exists because
 // positional binding of two ports of the same type type-checks either way
-// round, so a swap is silent (ADR 0005).
+// round, so a swap is silent (ADR 0005), and it is mandatory for exactly those
+// nodes: the compiler rejects a list whose target node has two inputs of the
+// same type (ADR 0009).
 type Needs struct {
 	order  []string
 	byPort map[string]string

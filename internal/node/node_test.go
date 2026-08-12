@@ -40,6 +40,38 @@ func TestTypedNodeDescriptor(t *testing.T) {
 	}
 }
 
+func TestAmbiguousInputs(t *testing.T) {
+	distinct := Descriptor{Inputs: []PortDescriptor{{"a", "Payload"}, {"b", "Other"}}}
+	if _, _, ok := distinct.AmbiguousInputs(); ok {
+		t.Error("ports of distinct types are not ambiguous: a swap fails the type check")
+	}
+
+	single := Descriptor{Inputs: []PortDescriptor{{"a", "Payload"}}}
+	if _, _, ok := single.AmbiguousInputs(); ok {
+		t.Error("one port cannot be bound to the wrong thing")
+	}
+
+	dup := Descriptor{Inputs: []PortDescriptor{{"a", "Payload"}, {"b", "Payload"}}}
+	typ, names, ok := dup.AmbiguousInputs()
+	if !ok {
+		t.Fatal("two ports of the same type are ambiguous")
+	}
+	if typ != "Payload" {
+		t.Errorf("type = %q, want %q", typ, "Payload")
+	}
+	if names != `"a", "b"` {
+		t.Errorf("names = %s, want %s", names, `"a", "b"`)
+	}
+
+	// The report names only the ports that collide, and picks them in port
+	// order so the message is the same on every compile.
+	partial := Descriptor{Inputs: []PortDescriptor{{"a", "Other"}, {"b", "Payload"}, {"c", "Payload"}}}
+	typ, names, ok = partial.AmbiguousInputs()
+	if !ok || typ != "Payload" || names != `"b", "c"` {
+		t.Errorf("AmbiguousInputs = %q, %s, %v; want Payload, %s, true", typ, names, ok, `"b", "c"`)
+	}
+}
+
 func TestTypedNodeExecute(t *testing.T) {
 	n := NewTypedNode("bump", bump)
 

@@ -4,9 +4,13 @@ Date: 2026-08-12
 
 ## Status
 
-Accepted
+Accepted, extended by ADR 0009.
 
 Extends ADR 0002, which chose positional binding and predicted this change.
+
+The named form described here is unchanged. ADR 0009 closes the risk left open
+below by making it mandatory, as a compile error rather than the warning
+suggested here, for nodes whose input ports are not pairwise type-distinct.
 
 ## Context
 
@@ -94,6 +98,9 @@ ever saw ordered indices, and they still do.
   a positional binding feeds two ports of identical type would close that, and is
   worth doing if such nodes become common.
 
+  Closed by ADR 0009, which rejected the warning and made the case a compile
+  error: a warning in a compile-time-first engine is a defect that ships.
+
 ## Alternatives Considered
 
 ### Make named binding mandatory for multi-input nodes
@@ -101,6 +108,11 @@ ever saw ordered indices, and they still do.
 Would close the risk above completely. Rejected for now because it is a breaking
 change for a shape that does not exist yet in the built-in node set, and because
 the warning above achieves most of it without breaking anything.
+
+ADR 0009 revisited this and took a narrower version: mandatory for nodes whose
+input ports share a type, not for every multi-input node. The "does not exist
+yet" argument turned out to favour acting rather than waiting, since the change
+is free precisely while no such node exists.
 
 ### Deprecate the positional form entirely
 

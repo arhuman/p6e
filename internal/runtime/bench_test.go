@@ -137,7 +137,10 @@ func BenchmarkFanIn64(b *testing.B) {
 		next := make([]string, 0, len(level)/2)
 		for i := 0; i < len(level); i += 2 {
 			name := fmt.Sprintf("merge%d_%d", round, i)
-			fmt.Fprintf(&sb, "  %s:\n    uses: merge\n    needs: [%s, %s]\n", name, level[i], level[i+1])
+			// merge takes two Box inputs, so the mapping form is mandatory: a
+			// positional swap between same-typed ports would type check (ADR 0009).
+			fmt.Fprintf(&sb, "  %s:\n    uses: merge\n    needs:\n      in0: %s\n      in1: %s\n",
+				name, level[i], level[i+1])
 			next = append(next, name)
 		}
 		level = next
