@@ -253,6 +253,52 @@ Runs the pipeline once per matching HTTP request.
 | `path` | string | yes | | Must start with `/`. |
 | `method` | string | no | `POST` | One of GET, POST, PUT, PATCH, DELETE. Case insensitive. |
 | `max_body` | int | no | 1 MiB | Bytes. A larger body is refused before any step runs. |
+| `auth` | block | no | none | Verifies every event's signature. Absent means the route is open. |
+
+**A webhook with no `auth` block authenticates nothing.** Anyone who can reach
+the listener can start the run, so the daemon logs a warning at startup naming
+every open route. Either configure `auth` here or front the listener with a
+proxy that authenticates.
+
+`auth` fields:
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `scheme` | string | yes | Only `hmac-sha256` exists: HMAC-SHA256 over the raw body, hex encoded. |
+| `header` | string | yes | Where the signature arrives, for example `X-Hub-Signature-256`. |
+| `prefix` | string | no | What the sender puts before the digest, for example `sha256=`. Empty means the header holds the digest alone. |
+| `secret_env` | string | yes | Names the environment variable holding the shared secret. |
+
+```yaml
+trigger:
+  uses: trigger.webhook
+  with:
+    path: /hooks/deploy
+    auth:
+      scheme: hmac-sha256
+      header: X-Hub-Signature-256
+      prefix: "sha256="
+      secret_env: DEPLOY_WEBHOOK_SECRET
+  timeout: 30s
+```
+
+The secret is **named, not inlined**. A pipeline directory is deployed and read
+like a crontab, which is the wrong place for a credential, and naming a variable
+is also what keeps `p6e check` free of secrets: the block is validated at
+compile time and the variable is read per request, so a pipeline whose secret
+exists only in production still validates anywhere.
+
+A rejected event answers `401` with the body `unauthorized`, and nothing else.
+Which half of the signature was wrong distinguishes a missing header from a bad
+digest, and telling the sender that tells an attacker which half to work on, so
+it goes to the daemon's log instead. An unset `secret_env` is a broken daemon
+rather than an unauthorized caller: it answers `500` and names the variable.
+
+| Code | Status | When |
+|---|---|---|
+| `unauthorized` | 401 | No signature, a malformed one, or one that does not match the body. |
+| `secret_unset` | 500 | `secret_env` is unset or empty in the daemon's environment. |
+| `body_too_large` | 400 | The body exceeded `max_body`. Checked before the signature, since the signature is computed over the body. |
 
 Supplies:
 
@@ -987,6 +1033,7 @@ Makes the call.
 |---|---|---|---|---|
 | `timeout` | duration string | no | `30s` | Bounds one call end to end, connection through body read. Must be positive. |
 | `max_body_bytes` | int | no | `10485760` (10 MiB) | Caps the body a step will hold. Must be positive. |
+| `allow_private` | bool | no | `false` | Permits internal destinations. Off by default: see below. |
 
 ```yaml
 fetch:
@@ -1019,12 +1066,43 @@ An oversized body is detected rather than truncated: the reader is given the
 limit plus one byte, so a body exactly at the limit still reads and one byte over
 is an error instead of silent data loss.
 
-All steps share one HTTP transport, so connection pooling, keep-alive and TLS
-session reuse work across steps. `MaxIdleConnsPerHost` is raised to 32 from the
-standard library's 2, because a pipeline typically fans out against one host and
-two idle connections would force a reconnect on nearly every step. The client is
-built at compile time and shared by every execution of the step, which is what
-makes that reuse possible.
+**Internal destinations are refused by default.** A request can be built from
+data: `http.from_url` takes its URL off an edge, and that edge can carry a
+webhook body, so an outbound call is reachable by whoever sent the event.
+Without a policy the daemon is a confused deputy, sitting inside a network the
+caller cannot reach and fetching whatever it is told to. These are refused:
+
+| Range | Why |
+|---|---|
+| `127.0.0.0/8`, `::1` | Loopback, which includes p6e's own admin listener. |
+| `169.254.0.0/16`, `fe80::/10` | Link-local, where cloud metadata (`169.254.169.254`) lives. |
+| `10/8`, `172.16/12`, `192.168/16`, `fc00::/7` | Private and unique-local. |
+| `0.0.0.0`, `::` | Unspecified. |
+| Multicast | Not a call destination. |
+
+Set `allow_private: true` on the step that is meant to reach a service inside
+the deployment. It is a decision about one step, not the process.
+
+The check runs **in the dialer**, on the address actually being connected to,
+not on the URL string. That is what makes DNS rebinding a non-issue: there is no
+window between resolving a hostname and connecting to it in which a second DNS
+answer could return a different address. It also covers every redirect hop,
+since each hop dials through the same transport. Redirects are additionally
+capped at 10 and re-checked for scheme, because otherwise a redirect is a hole
+in `http.build`'s compile-time URL check: the configured URL is validated and
+the location a server returns is not.
+
+A refused destination surfaces as `transport`, which is retryable. That is
+deliberate: the dial genuinely failed, and a pipeline pointed at a name whose
+resolution is being fixed should get its retries.
+
+Steps share one HTTP transport **per destination policy**, so connection
+pooling, keep-alive and TLS session reuse work across every step that made the
+same choice. `MaxIdleConnsPerHost` is raised to 32 from the standard library's
+2, because a pipeline typically fans out against one host and two idle
+connections would force a reconnect on nearly every step. The client is built at
+compile time and shared by every execution of the step, which is what makes that
+reuse possible.
 
 **Compile errors:** `bad_config` (timeout not a duration or not positive,
 `max_body_bytes` negative).

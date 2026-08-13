@@ -26,6 +26,10 @@ The parts of p6e that meet input you do not control:
 - **The webhook listener.** Request bodies are attacker-controlled. They are
   bounded by `max_body` and read before a run starts, but anything reachable
   through them is in scope.
+- **Outbound calls built from data.** `http.from_url` takes its URL off an
+  edge, so a webhook body can choose where the daemon connects. Internal
+  destinations are refused by default (ADR 0014); a way around that policy is
+  in scope.
 - **The compiler.** A pipeline file is a trusted input in normal use, but a
   crash or an unbounded allocation while compiling one is still a bug.
 - **The admin listener** (`/healthz`, `/readyz`, `/metrics`). It defaults to
@@ -46,9 +50,45 @@ The parts of p6e that meet input you do not control:
 
 ## Hardening notes
 
+### Webhooks authenticate nothing unless you configure them to
+
+This is the single most important line in this document. A `trigger.webhook`
+with no `auth` block runs its pipeline for **anyone who can reach the
+listener**. Since the `exec` node runs local processes, an open route in front
+of a pipeline that shells out is remote process execution.
+
+Give the trigger an `auth` block, which verifies an HMAC-SHA256 signature over
+the raw body before any run starts:
+
+```yaml
+trigger:
+  uses: trigger.webhook
+  with:
+    path: /hooks/deploy
+    auth:
+      scheme: hmac-sha256
+      header: X-Hub-Signature-256
+      prefix: "sha256="
+      secret_env: DEPLOY_WEBHOOK_SECRET
+```
+
+The secret is named rather than inlined, so it stays out of the pipeline
+directory and `p6e check` still needs no secrets. See `docs/pipeline.md` and
+ADR 0013.
+
+The daemon logs a warning at startup naming every route that authenticates
+nothing. Treat it as a finding, not as noise.
+
+### The rest
+
 - Put the webhook listener behind a reverse proxy that terminates TLS. The
   production compose overlay does this, with HSTS and baseline security headers
-  at the Traefik edge.
+  at the Traefik edge. Edge authentication and signature verification answer
+  different questions, so do both: a proxy cannot verify a sender's signature
+  scheme on the daemon's behalf, and a signature does not give you TLS.
+- Keep `allow_private` off unless a step is meant to reach inside the
+  deployment. It is what stops a URL that arrived on an edge from reaching cloud
+  metadata, your internal services, or p6e's own admin listener (ADR 0014).
 - Keep `--admin-listen` on loopback, or behind the same proxy with
   authentication. Never publish it beside the webhook port.
 - `p6e check --dir` before deploying a pipeline directory. `make preflight`
