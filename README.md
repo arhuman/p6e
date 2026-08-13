@@ -285,6 +285,37 @@ A `Claim` is the process-wide resource a trigger needs to itself, such as
 `POST /hooks/deploy`. Two served pipelines making the same claim are both
 rejected, and `p6e check --dir` reports it.
 
+## Running it as a service
+
+```bash
+cp env.sample .env                 # then point P6E_PIPELINES at your directory
+make up                            # build and run the local stack
+make logs
+make down
+```
+
+The image is a static binary on alpine, about 8 MB, running as uid 1001. The
+pipeline directory is mounted read-only at `/pipelines`: it is the unit of
+deployment, and baking it into the image would mean rebuilding to edit a
+pipeline.
+
+Two ports, and the split matters. `8080` answers webhooks. `8081` serves
+`/healthz`, `/readyz` and `/metrics`, and it defaults to loopback because it
+describes every pipeline in the process. Every compose overlay publishes it to
+`127.0.0.1` only; reaching it from a scraper is a deliberate act.
+
+`docker-compose.yml` is a neutral base with no host ports or restart policy;
+`docker-compose.local.yml` publishes ports and fails fast, and
+`docker-compose.prod.yml` joins an existing Traefik on an external `proxy`
+network, sets resource limits, and refuses to start on a placeholder domain.
+
+Validate a directory before deploying it, which is the same check the daemon
+runs at load time and the reason `--dir` exists:
+
+```bash
+p6e check --dir /path/to/pipelines
+```
+
 ## Status and non-goals
 
 V0, under active development; see `PLAN.md`. Deliberately absent: an
@@ -334,9 +365,10 @@ on.
 ## Build
 
 ```bash
-make build   # compile bin/p6e
+make build   # compile bin/p6e, with version metadata
 make test    # run tests
 make bench   # engine overhead benchmarks
 make race    # tests under the race detector
-make audit   # vet + lint + vuln scan
+make audit   # vet + lint + vuln scan + coverage gate
+make image   # build the container image
 ```

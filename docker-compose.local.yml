@@ -1,0 +1,17 @@
+# Local overlay: publish both ports so webhooks can be curled and metrics read.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+
+services:
+  p6e:
+    container_name: p6e-local
+    ports:
+      # Configurable, never hardcoded: moving a port must not mean editing a
+      # compose file.
+      - "${P6E_PORT:-8080}:8080"
+      # Bound to loopback even locally. This surface describes every pipeline in
+      # the process and there is no reason for it to leave the machine.
+      - "127.0.0.1:${P6E_ADMIN_PORT:-8081}:8081"
+    # Fail fast while iterating rather than looping on a broken pipeline
+    # directory, which the daemon exits over.
+    restart: "no"

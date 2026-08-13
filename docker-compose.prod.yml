@@ -1,0 +1,50 @@
+# Production overlay: joins the host's existing reverse proxy rather than
+# publishing 8080 itself, keeps the admin surface off the public interface, and
+# bounds what one runaway pipeline can take from the host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Requires an external `proxy` network already created by the host's shared
+# Traefik. Never ship a per-app proxy binding 80/443.
+
+services:
+  p6e:
+    container_name: p6e
+    restart: always
+    networks:
+      - proxy
+    ports:
+      # Only the admin port is published, and only to loopback, so a scraper or
+      # an SSH tunnel can reach it while the internet cannot. Webhooks arrive
+      # through the proxy instead.
+      - "127.0.0.1:${P6E_ADMIN_PORT:-8081}:8081"
+    labels:
+      traefik.enable: "true"
+      # The service is on more than one network, so the proxy must be told which
+      # one to route over, or the choice is non-deterministic.
+      traefik.docker.network: proxy
+      traefik.http.services.p6e.loadbalancer.server.port: "8080"
+      # Canonical www plus a bare apex router, two routers onto one service.
+      traefik.http.routers.p6e.rule: "Host(`www.${APEX_DOMAIN:?set APEX_DOMAIN in .env}`)"
+      traefik.http.routers.p6e.entrypoints: websecure
+      traefik.http.routers.p6e.tls.certresolver: "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      traefik.http.routers.p6e.priority: "1"
+      traefik.http.routers.p6e-bare.rule: "Host(`${APEX_DOMAIN}`)"
+      traefik.http.routers.p6e-bare.entrypoints: websecure
+      traefik.http.routers.p6e-bare.tls.certresolver: "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+    # A pipeline can shell out and make HTTP calls, so it is worth bounding what
+    # one bad pipeline can take from the host. The step budget bounds goroutines
+    # inside the process; this bounds the process itself.
+    deploy:
+      resources:
+        limits:
+          cpus: "${P6E_CPU_LIMIT:-2.0}"
+          memory: ${P6E_MEMORY_LIMIT:-512M}
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+
+networks:
+  proxy:
+    external: true

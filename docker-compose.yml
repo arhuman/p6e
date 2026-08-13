@@ -1,0 +1,45 @@
+# Neutral base: what the service is, not where it is exposed. Host ports,
+# container names and restart policy live in the overlays, so the same base
+# serves local and production without editing.
+#
+#   local: docker compose -f docker-compose.yml -f docker-compose.local.yml up
+#   prod:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Compose auto-loads ./.env for ${VAR} interpolation. Derive it from env.sample.
+
+services:
+  p6e:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${P6E_VERSION:-dev}
+        COMMIT: ${P6E_COMMIT:-unknown}
+        BUILD_DATE: ${P6E_BUILD_DATE:-unknown}
+    image: p6e:${P6E_TAG:-0.1.0}
+    environment:
+      TZ: ${TZ:-UTC}
+    # The pipeline directory is the unit of deployment. Read-only because the
+    # daemon only ever reads it: a pipeline that could rewrite its own
+    # definition is not something this engine offers.
+    volumes:
+      - ${P6E_PIPELINES:-./examples}:/pipelines:ro
+    # --admin-listen binds all interfaces rather than the default loopback,
+    # because the healthcheck runs inside the container but a scraper does not.
+    # The overlays decide whether that port is published to the host.
+    command:
+      - serve
+      - --listen
+      - ":8080"
+      - --admin-listen
+      - ":8081"
+      - --max-concurrency
+      - ${P6E_MAX_CONCURRENCY:-256}
+      - /pipelines
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8081/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped

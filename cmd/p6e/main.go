@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	gruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,6 +41,7 @@ Usage:
                               trigger, each when its trigger fires
   p6e nodes                   list the available node capabilities
   p6e triggers                list the available trigger capabilities
+  p6e version                 print the build this binary was made from
 
 Options for run:
   --input NAME=VALUE          supply a value the pipeline declared under inputs.
@@ -71,6 +73,16 @@ const (
 	exitOK      = 0
 	exitFailure = 1
 	exitUsage   = 2
+)
+
+// Build metadata, stamped by the linker (see the Makefile's LDFLAGS). The
+// defaults are what a plain `go build` produces, and saying so is better than
+// an empty string that reads like a bug. A long-lived daemon has to be able to
+// answer which build it is.
+var (
+	Version   = "dev"
+	GitCommit = "unknown"
+	BuildDate = "unknown"
 )
 
 func main() {
@@ -115,6 +127,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		for _, name := range trigger.Builtins().Names() {
 			fmt.Fprintln(stdout, name)
 		}
+		return exitOK
+
+	case "version", "--version":
+		fmt.Fprintf(stdout, "p6e %s (commit %s, built %s, %s)\n",
+			Version, GitCommit, BuildDate, gruntime.Version())
 		return exitOK
 	case "run":
 		files, runOpts, rawInputs, unknown := splitRunArgs(args[1:])

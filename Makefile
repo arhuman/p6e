@@ -15,10 +15,21 @@ COVER_MIN ?= 85
 GOLANGCI_VERSION    ?= v2.12.2
 GOVULNCHECK_VERSION ?= v1.1.4
 
+# Version metadata stamped into the binary, so a running daemon can say which
+# build it is. BUILD_DATE is the committer date, not wall-clock time, which
+# keeps two builds of the same commit byte-identical.
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT     ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell git log -1 --format=%cI 2>/dev/null || echo unknown)
+LDFLAGS := -s -w \
+	-X 'main.Version=$(VERSION)' \
+	-X 'main.GitCommit=$(COMMIT)' \
+	-X 'main.BuildDate=$(BUILD_DATE)'
+
 # ==================================================================================== #
 # PHONY DECLARATIONS (in alphabetical order)
 # ==================================================================================== #
-.PHONY: audit bench build clean confirm cover fulltest help race release test tidy tools
+.PHONY: audit bench build clean confirm cover down fulltest help image logs race release test tidy tools up
 
 # ==================================================================================== #
 # STANDARD TARGETS (in alphabetical order)
@@ -37,9 +48,11 @@ audit: cover
 bench:
 	go test -bench=. -benchmem -run='^$$' ./internal/runtime/...
 
-## build: compile the p6e binary into bin/
+## build: compile the p6e binary into bin/ with version metadata
+# CGO_ENABLED=0 => a static binary that runs in scratch/alpine; -trimpath =>
+# reproducible paths.
 build:
-	go build -o 20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400 702BIN_DIR)/20 20 12 61 79 80 81 98 701 33 100 204 250 395 398 399 400 702BINARY) ./cmd/p6e
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) ./cmd/p6e
 
 ## clean: clean Go build and test cache and remove built binaries
 clean:
@@ -60,6 +73,10 @@ cover:
 	@total=$$(go tool cover -func=coverage.out | awk '/^total:/ {print $$3}' | tr -d '%'); \
 	awk -v t="$$total" -v min="$(COVER_MIN)" 'BEGIN { if (t+0 < min+0) { printf "FAIL: coverage %.1f%% < %d%%\n", t, min; exit 1 } }'
 
+## down: stop the local stack
+down:
+	docker compose -f docker-compose.yml -f docker-compose.local.yml down
+
 ## fulltest: run *all* tests with verbose output. use 'test' for short/unit tests only.
 fulltest:
 	go test -v -cover ./...
@@ -68,6 +85,18 @@ fulltest:
 help:
 	@echo 'Usage:'
 	@sed -n 's/^##//p' ${MAKEFILE_LIST} | column -t -s ':' | sed -e 's/^/ /'
+
+## image: build the container image with the same version metadata as build
+image:
+	DOCKER_BUILDKIT=1 docker build \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg COMMIT=$(COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-t $(BINARY):$(VERSION) .
+
+## logs: follow the local stack's logs
+logs:
+	docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f
 
 ## race: run tests under the race detector
 race:
@@ -91,6 +120,10 @@ tools:
 	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION)
 	@go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 	@echo "Tools installed in $(shell go env GOBIN || go env GOPATH)/bin"
+
+## up: build and run the local stack
+up:
+	docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
 
 # ==================================================================================== #
 # UTILITY TARGETS

@@ -1,0 +1,14 @@
+# Allowlist: exclude everything, then re-include exactly what the Dockerfile
+# COPYs. Anything new (a pipeline directory, a dump, a secret, coverage output)
+# stays out of the build context by construction rather than by remembering.
+*
+
+# Keep in sync with the Dockerfile's COPY lines, one for one.
+!go.mod
+!go.sum
+!cmd
+!internal
+
+# Last match wins, so this comes after the re-includes. `go build` ignores test
+# files; they would only enlarge the context and bust the cache.
+**/*_test.go
