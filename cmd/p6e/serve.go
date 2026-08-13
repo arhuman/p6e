@@ -41,6 +41,13 @@ func splitServeArgs(args []string) (dirs []string, opts daemon.Options, unknown 
 			}
 			opts.Addr = value
 
+		case name == "--admin-listen":
+			value, ok := take(&i, arg)
+			if !ok {
+				return nil, opts, arg, nil
+			}
+			opts.AdminAddr = value
+
 		case name == "--max-concurrency":
 			value, ok := take(&i, arg)
 			if !ok {

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,16 +31,25 @@ import (
 // Defaults for Options.
 const (
 	DefaultAddr           = ":8080"
+	DefaultAdminAddr      = "127.0.0.1:8081"
 	DefaultMaxConcurrency = 256
 	DefaultDrainTimeout   = 30 * time.Second
 	DefaultReadTimeout    = 30 * time.Second
 )
+
+// AdminDisabled is the AdminAddr that serves no admin endpoints.
+const AdminDisabled = "-"
 
 // Options configures a daemon. Everything is optional.
 type Options struct {
 	// Addr is the address the webhook listener binds. Unused when no served
 	// pipeline has an HTTP trigger.
 	Addr string
+	// AdminAddr is the address for liveness, readiness and metrics. Zero
+	// selects DefaultAdminAddr, which is loopback: this surface describes every
+	// pipeline in the process and should not be exposed by accident. Set it to
+	// "-" to serve no admin endpoints at all.
+	AdminAddr string
 	// MaxConcurrency bounds steps in flight across every pipeline at once, not
 	// pipelines. Zero selects DefaultMaxConcurrency.
 	MaxConcurrency int
@@ -61,10 +71,12 @@ type Daemon struct {
 	slots     chan struct{}
 	log       *slog.Logger
 	addr      string
+	adminAddr string
 	drain     time.Duration
 	abandon   time.Duration
 
 	server *http.Server
+	admin  *http.Server
 	// routes maps a claim key such as "POST /hooks/deploy" to the pipeline that
 	// answers it. Load has already proven no two pipelines share one.
 	routes map[string]*Pipeline
@@ -83,6 +95,7 @@ func New(served []*Pipeline, opts Options) *Daemon {
 		pipelines: served,
 		log:       opts.Logger,
 		addr:      opts.Addr,
+		adminAddr: opts.AdminAddr,
 		drain:     opts.DrainTimeout,
 		abandon:   opts.AbandonAfter,
 		routes:    map[string]*Pipeline{},
@@ -92,6 +105,9 @@ func New(served []*Pipeline, opts Options) *Daemon {
 	}
 	if d.addr == "" {
 		d.addr = DefaultAddr
+	}
+	if d.adminAddr == "" {
+		d.adminAddr = DefaultAdminAddr
 	}
 	if d.drain <= 0 {
 		d.drain = DefaultDrainTimeout
@@ -146,36 +162,49 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		}()
 	}
 
-	serverErr := make(chan error, 1)
+	serverErr := make(chan error, 2)
+	// The admin listener runs whether or not any pipeline is a webhook, because
+	// a schedule-only daemon otherwise offers no way at all to tell whether it
+	// is alive or has quarantined everything it was given.
+	if d.adminAddr != AdminDisabled {
+		d.admin = &http.Server{
+			Addr:              d.adminAddr,
+			Handler:           d.adminHandler(),
+			ReadHeaderTimeout: DefaultReadTimeout,
+		}
+		go func() { serverErr <- listenAndServe(d.admin, "admin listener") }()
+		d.log.Info("serving admin endpoints",
+			slog.String("addr", d.adminAddr),
+			slog.String("paths", strings.Join([]string{pathHealth, pathReady, pathMetrics}, " ")))
+	}
+
 	if len(d.routes) > 0 {
 		d.server = &http.Server{
 			Addr:              d.addr,
 			Handler:           d.handler(),
 			ReadHeaderTimeout: DefaultReadTimeout,
 		}
-		go func() {
-			err := d.server.ListenAndServe()
-			if errors.Is(err, http.ErrServerClosed) {
-				err = nil
-			}
-			serverErr <- err
-		}()
+		go func() { serverErr <- listenAndServe(d.server, "webhook listener") }()
 		d.log.Info("serving webhooks", slog.String("addr", d.addr), slog.Int("routes", len(d.routes)))
 	}
 
+	// Either listener failing ends the daemon: a process that answers webhooks
+	// but cannot report its own health, or reports health while answering
+	// nothing, is worse than one that stopped and said why.
 	var failure error
 	select {
 	case <-ctx.Done():
 	case failure = <-serverErr:
-		if failure != nil {
-			failure = fmt.Errorf("webhook listener: %w", failure)
-		}
 	}
 
 	stopListeners()
 	d.shutdownServer()
 	listeners.Wait()
 	d.drainRuns()
+	// The admin listener closes last, so readiness reports "draining" for as
+	// long as the drain actually lasts rather than going dark at the start of
+	// it. That is the window a rolling deploy needs to see.
+	d.shutdown(d.admin, "admin listener")
 	return failure
 }
 
@@ -200,15 +229,27 @@ func (d *Daemon) listen(ctx context.Context, p *Pipeline, driven trigger.SelfDri
 
 // shutdownServer stops accepting requests and lets the handlers already running
 // finish, which is the same bargain drainRuns makes for schedules.
-func (d *Daemon) shutdownServer() {
-	if d.server == nil {
+func (d *Daemon) shutdownServer() { d.shutdown(d.server, "webhook listener") }
+
+// listenAndServe runs one listener, naming it in any failure it reports. A
+// closed server is an ordinary shutdown, not a failure.
+func listenAndServe(server *http.Server, what string) error {
+	err := server.ListenAndServe()
+	if err == nil || errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
+func (d *Daemon) shutdown(server *http.Server, what string) {
+	if server == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d.drain)
 	defer cancel()
 
-	if err := d.server.Shutdown(ctx); err != nil {
-		d.log.Warn("webhook listener did not shut down cleanly", slog.String("error", err.Error()))
+	if err := server.Shutdown(ctx); err != nil {
+		d.log.Warn(what+" did not shut down cleanly", slog.String("error", err.Error()))
 	}
 }
 

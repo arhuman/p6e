@@ -352,7 +352,7 @@ func TestDrainWaitsForRunsInProgress(t *testing.T) {
 func TestRepeatedAbandonmentQuarantinesAPipeline(t *testing.T) {
 	p := &probe{}
 	src := strings.Replace(webhookYAML("/deaf", "out", "deaf"), "  timeout: 2s", "  timeout: 20ms", 1)
-	d, server, loaded := serveOne(t, p, Options{AbandonAfter: 20 * time.Millisecond}, map[string]string{
+	_, server, loaded := serveOne(t, p, Options{AbandonAfter: 20 * time.Millisecond}, map[string]string{
 		"deaf.yaml": src,
 	})
 	if len(loaded.Served) != 1 {
@@ -371,7 +371,6 @@ func TestRepeatedAbandonmentQuarantinesAPipeline(t *testing.T) {
 	if status, _ := post(t, server, "/deaf", "{}"); status != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503 once quarantined", status)
 	}
-	_ = d
 }
 
 // A run that succeeds clears the streak, so an intermittent slow node never

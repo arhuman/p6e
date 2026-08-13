@@ -1363,6 +1363,7 @@ Options for `serve`:
 | Option | Effect |
 |---|---|
 | `--listen ADDR` | Address for webhook triggers. Default `:8080`. |
+| `--admin-listen ADDR` | Address for `/healthz`, `/readyz` and `/metrics`. Default `127.0.0.1:8081`; `-` serves none of them. |
 | `--max-concurrency N` | Steps in flight across every pipeline at once, not pipelines. Default 256. |
 | `--drain DURATION` | How long to wait for runs in progress on shutdown. Default 30s. |
 
@@ -1399,6 +1400,28 @@ stops firing and the reason is logged. An abandoned step is one still running
 after its run gave up on it, which happens when a node ignores its context; the
 goroutine cannot be stopped and, unlike a CLI run, a daemon does not exit
 shortly afterwards.
+
+### Admin endpoints
+
+On their own listener, defaulting to `127.0.0.1:8081`.
+
+| Path | Meaning |
+|---|---|
+| `GET /healthz` | The process is running. Nothing else: a daemon whose pipelines are all quarantined still answers `200`, because restarting it is a person's decision and a failing liveness probe would only make an orchestrator loop. |
+| `GET /readyz` | The daemon can still do useful work. `503` while draining, and `503` when every served pipeline is quarantined. |
+| `GET /metrics` | Prometheus text format: runs, failures, abandoned runs, in-flight and quarantine state per pipeline, plus the shared step budget. |
+
+They are on a separate listener for two reasons. A pipeline claims a method and
+a path, so sharing a mux would let one claim `POST /metrics` and shadow this, or
+be shadowed by it, and the loser would simply never fire. And the webhook
+listener is the one exposed to whatever sends the events, which is not somewhere
+operational detail about every pipeline in the process belongs.
+
+A schedule-only daemon has no webhook listener at all, so this is then the only
+way to see whether it is alive.
+
+Quarantine is the metric worth alerting on: `p6e_pipeline_quarantined` going to
+`1` means that pipeline will not run again until the daemon restarts.
 
 ## A complete example
 

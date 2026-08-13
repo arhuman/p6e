@@ -56,6 +56,10 @@ Options for run:
 
 Options for serve:
   --listen ADDR               address for webhook triggers (default :8080)
+  --admin-listen ADDR         address for /healthz, /readyz and /metrics
+                              (default 127.0.0.1:8081). It describes every
+                              pipeline in the process, so it defaults to
+                              loopback; "-" serves none of it.
   --max-concurrency N         steps in flight across every pipeline at once,
                               not pipelines (default 256)
   --drain DURATION            how long to wait for runs in progress on shutdown

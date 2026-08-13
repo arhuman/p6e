@@ -39,8 +39,13 @@ type state struct {
 	// on.
 	inflight atomic.Int64
 	// consecutiveAbandoned counts runs in a row that left a step running. It
-	// resets on any run that does not.
+	// resets on any run that does not, because the quarantine policy is about a
+	// pipeline that is persistently wedged rather than one that once was.
 	consecutiveAbandoned atomic.Int64
+	// abandonedRuns counts every run that left a step running, and never
+	// resets. It is what a monitor should alert on: the streak drives policy,
+	// this records how often it happened at all.
+	abandonedRuns atomic.Int64
 	// quarantined stops this pipeline firing at all.
 	quarantined atomic.Bool
 	// runs and failures are counters for reporting.
@@ -146,6 +151,7 @@ func (d *Daemon) record(p *Pipeline, ex *runtime.Execution, took time.Duration) 
 	if ex.Abandoned > 0 {
 		// Counted per run rather than per step: one run that wedges five steps
 		// is one incident, and what matters is whether it keeps happening.
+		p.abandonedRuns.Add(1)
 		streak := p.consecutiveAbandoned.Add(1)
 		d.log.Error("run abandoned a step, which leaks a goroutine for the life of the process",
 			append(attrs, slog.Int("abandoned", ex.Abandoned), slog.Int64("streak", streak))...)
