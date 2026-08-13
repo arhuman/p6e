@@ -48,6 +48,12 @@ func request(t *testing.T, ctx context.Context, with string, req *types.Request)
 	return newRequestNode(t, with).Execute(ctx, testEC(), []node.Value{node.NewValue(req)})
 }
 
+// allowPrivate is what a test needs to reach an httptest server, because those
+// bind loopback and the default destination policy refuses internal addresses.
+// It is spelled out at each call site rather than folded into the helper, so
+// that a test reaching inside the deployment says so.
+const allowPrivate = "allow_private: true\n"
+
 func succeeds(t *testing.T, r node.ResultValue) *types.Response {
 	t.Helper()
 	if r.Failed() {
@@ -98,7 +104,7 @@ func TestReturnsStatusHeadersAndBody(t *testing.T) {
 		io.WriteString(w, "hello")
 	})
 
-	resp := succeeds(t, request(t, t.Context(), "", &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: srv.URL}))
 
 	if resp.Status != http.StatusCreated {
 		t.Errorf("Status = %d, want %d", resp.Status, http.StatusCreated)
@@ -119,7 +125,7 @@ func TestNon2xxStatusIsDataNotAnError(t *testing.T) {
 		io.WriteString(w, "no such thing")
 	})
 
-	resp := succeeds(t, request(t, t.Context(), "", &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: srv.URL}))
 
 	if resp.Status != http.StatusNotFound {
 		t.Errorf("Status = %d, want 404", resp.Status)
@@ -136,7 +142,7 @@ func TestSendsMethodHeadersAndBody(t *testing.T) {
 		gotMethod, gotHeader, gotBody = r.Method, r.Header.Get("X-Token"), string(body)
 	})
 
-	succeeds(t, request(t, t.Context(), "", &types.Request{
+	succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{
 		Method:  http.MethodPost,
 		URL:     srv.URL,
 		Headers: map[string]string{"X-Token": "secret"},
@@ -161,7 +167,7 @@ func TestConnectionRefusedIsTransient(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	err := fails(t, request(t, t.Context(), "", &types.Request{URL: url}))
+	err := fails(t, request(t, t.Context(), allowPrivate, &types.Request{URL: url}))
 
 	if err.Kind != node.KindTransient {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindTransient)
@@ -174,7 +180,7 @@ func TestConnectionRefusedIsTransient(t *testing.T) {
 func TestTimeoutIsTransient(t *testing.T) {
 	srv := hang(t)
 
-	err := fails(t, request(t, t.Context(), "timeout: 50ms\n", &types.Request{URL: srv.URL}))
+	err := fails(t, request(t, t.Context(), allowPrivate+"timeout: 50ms\n", &types.Request{URL: srv.URL}))
 
 	if err.Kind != node.KindTransient {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindTransient)
@@ -194,7 +200,7 @@ func TestCancelledContextIsCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	err := fails(t, request(t, ctx, "timeout: 30s\n", &types.Request{URL: srv.URL}))
+	err := fails(t, request(t, ctx, allowPrivate+"timeout: 30s\n", &types.Request{URL: srv.URL}))
 
 	if err.Kind != node.KindCancelled {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindCancelled)
@@ -211,7 +217,7 @@ func TestBodyOverTheLimitFailsRatherThanTruncates(t *testing.T) {
 		w.Write(make([]byte, 2048))
 	})
 
-	err := fails(t, request(t, t.Context(), "max_body_bytes: 1024\n", &types.Request{URL: srv.URL}))
+	err := fails(t, request(t, t.Context(), allowPrivate+"max_body_bytes: 1024\n", &types.Request{URL: srv.URL}))
 
 	if err.Kind != node.KindPermanent {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindPermanent)
@@ -228,7 +234,7 @@ func TestBodyExactlyAtTheLimitIsKept(t *testing.T) {
 		w.Write(make([]byte, 1024))
 	})
 
-	resp := succeeds(t, request(t, t.Context(), "max_body_bytes: 1024\n", &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate+"max_body_bytes: 1024\n", &types.Request{URL: srv.URL}))
 
 	if len(resp.Body) != 1024 {
 		t.Errorf("read %d bytes, want the whole 1024 byte body", len(resp.Body))
@@ -263,7 +269,7 @@ func TestAppliesDefaultsWhenUnconfigured(t *testing.T) {
 		w.Write(make([]byte, 64<<10))
 	})
 
-	resp := succeeds(t, request(t, t.Context(), "", &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: srv.URL}))
 
 	if len(resp.Body) != 64<<10 {
 		t.Errorf("read %d bytes, want the whole body under the default limit", len(resp.Body))

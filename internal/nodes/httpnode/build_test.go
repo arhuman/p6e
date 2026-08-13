@@ -114,7 +114,7 @@ func TestHTTPNodesChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build New: %v", err)
 	}
-	request, err := RequestDefinition().New(node.EmptyConfig)
+	request, err := RequestDefinition().New(yamlConfig(allowPrivate))
 	if err != nil {
 		t.Fatalf("request New: %v", err)
 	}

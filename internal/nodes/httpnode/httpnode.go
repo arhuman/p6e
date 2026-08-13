@@ -10,9 +10,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/arhuman/p6e/internal/node"
@@ -29,27 +31,61 @@ const (
 const (
 	defaultTimeout      = 30 * time.Second
 	defaultMaxBodyBytes = 10 << 20
+	// maxRedirects matches net/http's own default. It is named here because
+	// setting CheckRedirect replaces that default rather than adding to it.
+	maxRedirects = 10
 )
 
-// transport is shared by every client this package builds. Connection pooling,
-// keep-alive, and TLS session reuse all live in the transport, so two steps
-// calling the same host reuse one pool even though each holds its own client.
+// There are exactly two transports, one per destination policy, and they are
+// package-level so that connection pooling, keep-alive and TLS session reuse
+// are shared across every step that made the same choice. A transport per step
+// would give each its own pool and reconnect constantly; a single transport
+// could not carry two policies, because the policy lives in the dialer.
 //
 // MaxIdleConnsPerHost is raised from the standard library's 2 because a
 // pipeline typically fans out against a single host, and two idle connections
 // would make it reconnect on nearly every step.
-var transport = &http.Transport{
-	Proxy: http.ProxyFromEnvironment,
-	DialContext: (&net.Dialer{
-		Timeout:   10 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}).DialContext,
-	ForceAttemptHTTP2:     true,
-	MaxIdleConns:          100,
-	MaxIdleConnsPerHost:   32,
-	IdleConnTimeout:       90 * time.Second,
-	TLSHandshakeTimeout:   10 * time.Second,
-	ExpectContinueTimeout: time.Second,
+var (
+	// guardedTransport refuses to dial an internal address. It is the default.
+	guardedTransport = newTransport(controlDestination)
+	// openTransport is what a step gets when it sets allow_private, which is
+	// the deliberate act of pointing a pipeline at something inside the
+	// deployment.
+	openTransport = newTransport(nil)
+)
+
+func newTransport(control func(network, address string, c syscall.RawConn) error) *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+			Control:   control,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+}
+
+// checkRedirect bounds redirect following and re-checks the scheme on every
+// hop. The address policy needs no repeating here: each hop dials through the
+// same transport, so its Control hook has already run.
+//
+// Without this a redirect is a hole in http.build's compile-time URL check: the
+// configured URL is validated while the location a server sends back is not,
+// so a trusted host could walk a pipeline to any scheme it liked.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if scheme := req.URL.Scheme; scheme != "http" && scheme != "https" {
+		return fmt.Errorf("refusing to follow a redirect to scheme %q", scheme)
+	}
+	return nil
 }
 
 // requestConfig is an http.request step's with block.
@@ -60,6 +96,16 @@ type requestConfig struct {
 	// MaxBodyBytes caps the response body a step will hold, so one oversized
 	// response cannot exhaust the process. It defaults to 10 MiB.
 	MaxBodyBytes int64 `yaml:"max_body_bytes"`
+	// AllowPrivate lets this step reach loopback, link-local, private and
+	// multicast addresses, which are refused by default.
+	//
+	// It is off by default because a request can be built from data: a URL that
+	// arrived on an edge from a webhook body would otherwise let whoever sent
+	// the event reach anything the daemon can route to, cloud metadata
+	// included. Turn it on for a step that is meant to call a service inside
+	// the deployment, which is a decision about one step rather than about the
+	// process.
+	AllowPrivate bool `yaml:"allow_private"`
 }
 
 // RequestDefinition registers the http.request capability: *types.Request in,
@@ -88,7 +134,15 @@ func RequestDefinition() node.Definition {
 				return nil, err
 			}
 
-			client := &http.Client{Transport: transport, Timeout: timeout}
+			transport := guardedTransport
+			if c.AllowPrivate {
+				transport = openTransport
+			}
+			client := &http.Client{
+				Transport:     transport,
+				Timeout:       timeout,
+				CheckRedirect: checkRedirect,
+			}
 			return node.NewTypedNode(RequestName,
 				func(ctx context.Context, _ *node.ExecutionContext, req *types.Request) node.Result[*types.Response] {
 					return call(ctx, client, maxBody, req)
