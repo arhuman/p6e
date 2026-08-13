@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/arhuman/p6e/internal/node"
+	"github.com/arhuman/p6e/internal/trigger"
 )
 
 type alpha struct{ N int }
@@ -80,7 +81,7 @@ func compileString(t *testing.T, src string) (*ExecutionPlan, error) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	return Compile(f, testRegistry(t), "test")
+	return Compile(f, &Registries{Nodes: testRegistry(t), Triggers: trigger.Builtins()}, "test")
 }
 
 func mustCompile(t *testing.T, src string) *ExecutionPlan {

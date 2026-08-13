@@ -25,6 +25,7 @@ import (
 	"github.com/arhuman/p6e/internal/nodes/types"
 	"github.com/arhuman/p6e/internal/pipeline"
 	"github.com/arhuman/p6e/internal/runtime"
+	"github.com/arhuman/p6e/internal/trigger"
 )
 
 const usage = `p6e compiles and runs typed pipelines.
@@ -204,6 +205,23 @@ func convertInput(typ node.TypeID, literal string) (node.Value, error) {
 	}
 }
 
+// registries are the capabilities a pipeline may name. Nodes and triggers are
+// resolved separately, because a pipeline must not be able to use one where the
+// other belongs.
+func registries() *pipeline.Registries {
+	return &pipeline.Registries{
+		Nodes:    nodes.Registry(),
+		Triggers: trigger.Builtins(),
+	}
+}
+
+// nameOf is how a pipeline file is identified everywhere: its base name without
+// the extension, which is also the workflow ID a run reports.
+func nameOf(path string) string {
+	base := filepath.Base(path)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
 func withFile(args []string, stderr io.Writer, fn func(path string) int) int {
 	if len(args) != 2 {
 		fmt.Fprintf(stderr, "%s takes exactly one pipeline file\n\n%s", args[0], usage)
@@ -269,8 +287,7 @@ func compile(path string, stderr io.Writer) (*pipeline.ExecutionPlan, int) {
 		return nil, exitFailure
 	}
 
-	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	plan, err := pipeline.Compile(file, nodes.Registry(), name)
+	plan, err := pipeline.Compile(file, registries(), nameOf(path))
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", path, err)
 		return nil, exitFailure

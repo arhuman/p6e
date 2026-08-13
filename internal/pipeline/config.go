@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/arhuman/p6e/internal/node"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,8 +22,53 @@ type File struct {
 	// Inputs are the values the run supplies, as a mapping of name to type
 	// name. An input is referenced by a step's needs exactly as a step is, so
 	// the two share one namespace and a collision is a compile error.
-	Inputs  map[string]string `yaml:"inputs"`
-	Steps   map[string]Step   `yaml:"steps"`
+	Inputs map[string]string `yaml:"inputs"`
+	// Trigger is what starts a run when the pipeline is served by a daemon.
+	// A pipeline without one is still perfectly valid; it is simply run by
+	// hand rather than served.
+	Trigger *TriggerSpec    `yaml:"trigger"`
+	Steps   map[string]Step `yaml:"steps"`
+}
+
+// OverlapPolicy is what happens when a trigger fires while a run of the same
+// pipeline is still going.
+type OverlapPolicy string
+
+const (
+	// OverlapAllow starts the new run alongside the one in flight.
+	OverlapAllow OverlapPolicy = "allow"
+	// OverlapDrop refuses the event and lets the run in flight finish.
+	OverlapDrop OverlapPolicy = "drop"
+)
+
+// TriggerSpec is the trigger block: what starts this pipeline, and the policy
+// the daemon applies around each run.
+//
+// A trigger is not a step. It supplies the values the pipeline declared under
+// inputs, and the compiler proves it supplies every one of them at the declared
+// type; the graph itself is unchanged and knows nothing about where its inputs
+// came from.
+type TriggerSpec struct {
+	// Uses names a trigger capability, for example "trigger.webhook".
+	Uses string `yaml:"uses"`
+	// With is the trigger's configuration, left undecoded here for the same
+	// reason a step's is: only the trigger knows its own config shape.
+	With yaml.Node `yaml:"with"`
+	// Timeout bounds one run. It is required for a trigger that answers a
+	// caller, because an unbounded run holds that caller open indefinitely.
+	Timeout Duration `yaml:"timeout"`
+	// RespondWith names the step whose output becomes the reply. It is only
+	// meaningful for a trigger that has somebody to reply to.
+	RespondWith string `yaml:"respond_with"`
+	// OnOverlap is "allow" or "drop". Empty takes the default for the kind of
+	// trigger, which is what OverlapDefault decides.
+	OnOverlap string `yaml:"on_overlap"`
+}
+
+// Config adapts the trigger's with block to the node package's Config
+// interface, exactly as a step's does.
+func (t TriggerSpec) Config() node.Config {
+	return yamlConfig{node: &t.With}
 }
 
 // Step is one entry under steps. The map key is the step's ID.

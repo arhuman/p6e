@@ -40,7 +40,7 @@ func benchPlan(b *testing.B, src string) *pipeline.ExecutionPlan {
 	if err != nil {
 		b.Fatalf("Parse: %v", err)
 	}
-	plan, err := pipeline.Compile(f, benchRegistry(&box{N: 1}), "bench")
+	plan, err := pipeline.Compile(f, &pipeline.Registries{Nodes: benchRegistry(&box{N: 1})}, "bench")
 	if err != nil {
 		b.Fatalf("Compile: %v", err)
 	}
@@ -180,7 +180,7 @@ func BenchmarkLargePayloadFanOut(b *testing.B) {
 		b.Fatalf("Parse: %v", err)
 	}
 	payload := &box{N: 1, Data: make([]byte, 16<<20)}
-	plan, err := pipeline.Compile(f, benchRegistry(payload), "bench")
+	plan, err := pipeline.Compile(f, &pipeline.Registries{Nodes: benchRegistry(payload)}, "bench")
 	if err != nil {
 		b.Fatalf("Compile: %v", err)
 	}
@@ -213,7 +213,7 @@ func BenchmarkCompile(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := pipeline.Compile(f, reg, "bench"); err != nil {
+		if _, err := pipeline.Compile(f, &pipeline.Registries{Nodes: reg}, "bench"); err != nil {
 			b.Fatal(err)
 		}
 	}

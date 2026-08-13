@@ -2,9 +2,11 @@ package pipeline
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/arhuman/p6e/internal/node"
+	"github.com/arhuman/p6e/internal/trigger"
 )
 
 // Problem is one thing wrong with a pipeline, attributed to a step where that
@@ -46,12 +48,12 @@ func (e *CompileError) Error() string {
 // Nothing it proves is re-checked at run time.
 //
 // name identifies the workflow in execution contexts and reports.
-func Compile(f *File, reg *node.Registry, name string) (*ExecutionPlan, error) {
+func Compile(f *File, reg *Registries, name string) (*ExecutionPlan, error) {
 	// Inputs lead, then steps, each group sorted. They share one namespace and
 	// one index space, so a dependency on an input needs no special case
 	// anywhere after this point.
 	inputs := f.InputNames()
-	c := &compiler{file: f, reg: reg, inputs: inputs}
+	c := &compiler{file: f, reg: reg.withDefaults(), inputs: inputs}
 	c.ids = append(append(make([]string, 0, len(inputs)+len(f.Steps)), inputs...), f.StepIDs()...)
 	c.index = make(map[string]int, len(c.ids))
 	for i, id := range c.ids {
@@ -68,6 +70,10 @@ func Compile(f *File, reg *node.Registry, name string) (*ExecutionPlan, error) {
 	c.checkDependencies()
 	c.checkCycles()
 	c.checkEdges()
+	// Last, because it judges the inputs against what the trigger supplies and
+	// the responding step against what it produces, so both have to be resolved
+	// before it can say anything useful.
+	c.resolveTrigger()
 
 	if len(c.problems) > 0 {
 		return nil, &CompileError{Problems: c.problems}
@@ -75,11 +81,36 @@ func Compile(f *File, reg *node.Registry, name string) (*ExecutionPlan, error) {
 	return c.plan(name), nil
 }
 
+// Registries bundles what a compilation resolves names against. Triggers is
+// separate from Nodes because a trigger is not a RuntimeNode, and a pipeline
+// must not be able to name one where the other belongs.
+type Registries struct {
+	Nodes    *node.Registry
+	Triggers *trigger.Registry
+}
+
+// withDefaults substitutes empty registries for missing ones, so a caller that
+// does not care about triggers gets "unknown trigger" rather than a panic.
+func (r *Registries) withDefaults() *Registries {
+	filled := *r
+	if filled.Nodes == nil {
+		filled.Nodes = node.NewRegistry()
+	}
+	if filled.Triggers == nil {
+		filled.Triggers = trigger.NewRegistry()
+	}
+	return &filled
+}
+
 type compiler struct {
 	file  *File
-	reg   *node.Registry
+	reg   *Registries
 	ids   []string
 	index map[string]int
+
+	// trigger is the compiled trigger block, nil when the pipeline declares
+	// none or when it did not compile.
+	trigger *TriggerBinding
 
 	// inputs are the leading entries of ids, and inputTypes holds the type each
 	// one declares, indexed the same way.
@@ -113,6 +144,134 @@ func (c *compiler) resolveInputs() {
 	}
 }
 
+// OverlapDefault is the policy for a pipeline that declares none.
+//
+// A trigger that answers a caller defaults to allow, because that caller is
+// waiting on its own event and refusing it for an unrelated one in flight would
+// be surprising. Every other trigger defaults to drop, which is the cron
+// convention and the only default that cannot pile runs up faster than they
+// finish. The kind of trigger is a fact it reports by the interface it
+// implements; which policy to take from that is the engine's reading of it, and
+// a pipeline overrides it with on_overlap.
+func OverlapDefault(t trigger.Trigger) OverlapPolicy {
+	if _, answers := t.(trigger.HTTPDriven); answers {
+		return OverlapAllow
+	}
+	return OverlapDrop
+}
+
+// resolveTrigger builds the trigger block and proves it fits the pipeline.
+//
+// The load-bearing check is that every declared input is supplied: the compiler
+// has already proven each step consumes its inputs at the declared types, so
+// showing the trigger produces those same types is what extends the proof all
+// the way out to the event. Nothing is left for the first request to discover.
+func (c *compiler) resolveTrigger() {
+	spec := c.file.Trigger
+	if spec == nil {
+		return
+	}
+
+	def, err := c.reg.Triggers.Resolve(spec.Uses)
+	if err != nil {
+		c.fail("", "trigger: %v", err)
+		return
+	}
+	built, err := def.New(spec.Config())
+	if err != nil {
+		c.fail("", "trigger: invalid configuration for %q: %v", spec.Uses, err)
+		return
+	}
+	if built == nil {
+		c.fail("", "trigger: %q built nothing", spec.Uses)
+		return
+	}
+
+	desc := built.Descriptor()
+	for i, name := range c.inputs {
+		declared := c.inputTypes[i]
+		if declared == "" {
+			continue // resolveInputs already reported it
+		}
+		provided, ok := desc.Provided(name)
+		switch {
+		case !ok:
+			c.fail("", "trigger: input %q is not supplied by %q (it supplies: %s)",
+				name, spec.Uses, desc.ProvidedNames())
+		case provided != declared:
+			c.fail("", "trigger: input %q is declared %s but %q supplies it as %s",
+				name, declared, spec.Uses, provided)
+		}
+	}
+
+	answering, answers := built.(trigger.HTTPDriven)
+	timeout := spec.Timeout.Duration()
+	// A run nobody is waiting on may take as long as it takes. One that holds a
+	// caller's connection open may not, and no default is safe enough to pick
+	// on the pipeline's behalf.
+	if answers && timeout <= 0 {
+		c.fail("", "trigger: %q needs a timeout, because a caller waits for the run to finish", spec.Uses)
+	}
+
+	overlap := OverlapPolicy(spec.OnOverlap)
+	if overlap == "" {
+		overlap = OverlapDefault(built)
+	}
+
+	c.trigger = &TriggerBinding{
+		Uses:        spec.Uses,
+		Trigger:     built,
+		RespondStep: c.resolveRespondWith(spec, answering, answers),
+		Timeout:     timeout,
+		Overlap:     overlap,
+	}
+}
+
+// resolveRespondWith locates the step whose output answers the caller, or
+// reports why it cannot. It returns -1 when the pipeline names none.
+func (c *compiler) resolveRespondWith(spec *TriggerSpec, answering trigger.HTTPDriven, answers bool) int {
+	if spec.RespondWith == "" {
+		return -1
+	}
+	if !answers {
+		c.fail("", "trigger: respond_with is set, but %q has nobody to answer", spec.Uses)
+		return -1
+	}
+
+	i, ok := c.index[spec.RespondWith]
+	if !ok {
+		c.fail("", "trigger: respond_with names %q, which is not a step in this pipeline",
+			spec.RespondWith)
+		return -1
+	}
+	if c.isInput(i) {
+		c.fail("", "trigger: respond_with names %q, which is an input rather than a step",
+			spec.RespondWith)
+		return -1
+	}
+
+	// The trigger says what it can write, so the pipeline package needs no
+	// knowledge of domain types to check this.
+	got := c.outputType(i)
+	if got == "" {
+		return -1 // already reported
+	}
+	if accepted := answering.ResponseTypes(); !slices.Contains(accepted, got) {
+		c.fail("", "trigger: respond_with names %q, which produces %s; %q can answer with %s",
+			spec.RespondWith, got, spec.Uses, renderTypes(accepted))
+		return -1
+	}
+	return i
+}
+
+func renderTypes(ids []node.TypeID) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = string(id)
+	}
+	return strings.Join(parts, " or ")
+}
+
 // isInput reports whether an index addresses a declared input rather than a
 // step. Inputs occupy the leading positions of ids.
 func (c *compiler) isInput(i int) bool { return i < len(c.inputs) }
@@ -141,7 +300,7 @@ func (c *compiler) resolve() {
 		}
 		step := c.file.Steps[id]
 
-		def, err := c.reg.Resolve(step.Uses)
+		def, err := c.reg.Nodes.Resolve(step.Uses)
 		if err != nil {
 			c.fail(id, "%v", err)
 			continue
@@ -349,7 +508,7 @@ func (c *compiler) resolveNamedNeeds(id string, step Step, desc node.Descriptor)
 // plan precomputes what the executor would otherwise have to work out on every
 // run: dependency indices, the reverse edges, and where to start.
 func (c *compiler) plan(name string) *ExecutionPlan {
-	p := &ExecutionPlan{Name: name, Steps: make([]CompiledStep, len(c.ids))}
+	p := &ExecutionPlan{Name: name, Steps: make([]CompiledStep, len(c.ids)), Trigger: c.trigger}
 
 	for i, id := range c.ids {
 		if c.isInput(i) {

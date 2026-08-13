@@ -92,6 +92,18 @@ func (f *File) validate() error {
 		}
 	}
 
+	if t := f.Trigger; t != nil {
+		if t.Uses == "" {
+			return fmt.Errorf("trigger: missing uses")
+		}
+		switch OverlapPolicy(t.OnOverlap) {
+		case "", OverlapAllow, OverlapDrop:
+		default:
+			return fmt.Errorf("trigger: unknown on_overlap %q (accepted: %s, %s)",
+				t.OnOverlap, OverlapAllow, OverlapDrop)
+		}
+	}
+
 	for _, id := range f.StepIDs() {
 		step := f.Steps[id]
 		if step.Uses == "" {

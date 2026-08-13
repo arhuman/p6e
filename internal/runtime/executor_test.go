@@ -47,7 +47,7 @@ func compile(t *testing.T, src string, register func(*node.Registry)) *pipeline.
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	plan, err := pipeline.Compile(f, reg, "test")
+	plan, err := pipeline.Compile(f, &pipeline.Registries{Nodes: reg}, "test")
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}

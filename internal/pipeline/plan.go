@@ -1,6 +1,11 @@
 package pipeline
 
-import "github.com/arhuman/p6e/internal/node"
+import (
+	"time"
+
+	"github.com/arhuman/p6e/internal/node"
+	"github.com/arhuman/p6e/internal/trigger"
+)
 
 // CompiledStep is a step with every question already answered. The executor
 // reads it and does no lookups of its own: no name resolution, no config
@@ -44,6 +49,25 @@ type PlanInput struct {
 	Step int
 }
 
+// TriggerBinding is a compiled trigger block: the built trigger, plus the
+// policy a daemon applies around each run it starts.
+//
+// It is not part of execution. The executor never sees it: by the time Run is
+// called the trigger has already done its job, which was to supply the inputs.
+type TriggerBinding struct {
+	// Uses is the capability name, kept for reporting.
+	Uses string
+	// Trigger is the built, configured trigger, shared by every run it starts.
+	Trigger trigger.Trigger
+	// RespondStep indexes Steps, or is -1 when the pipeline names no step to
+	// reply with.
+	RespondStep int
+	// Timeout bounds one run, zero for no bound beyond the daemon's own.
+	Timeout time.Duration
+	// Overlap is what to do when an event arrives while a run is in flight.
+	Overlap OverlapPolicy
+}
+
 // ExecutionPlan is a compiled pipeline: immutable, reusable, and safe to run
 // many times concurrently. All per-execution state lives in the executor.
 //
@@ -58,6 +82,10 @@ type ExecutionPlan struct {
 	// Inputs are the values the run must supply, in the same order as the
 	// leading entries of Steps.
 	Inputs []PlanInput
+	// Trigger is what starts a run when this pipeline is served, or nil when
+	// the pipeline declares none. A daemon serves exactly the plans where this
+	// is set; everything else is run by hand.
+	Trigger *TriggerBinding
 	// Roots are the indices of steps with no dependencies: where execution
 	// starts. Inputs are not roots. They carry no computation, so the executor
 	// records them before scheduling anything.
