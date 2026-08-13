@@ -1,4 +1,11 @@
 bin/
+dist/
 *.test
 *.out
-dist/
+
+# Never commit a real env file. This is repeated here rather than left to a
+# personal global ignore: a contributor cloning this repo does not have that
+# file, and env.sample is the only variant meant to be tracked.
+.env
+.env.*
+!env.sample

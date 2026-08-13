@@ -6,6 +6,24 @@
 BINARY := p6e
 BIN_DIR := bin
 
+ENV_FILE ?= .env
+
+# `docker compose` reads .env on its own, but `make` does not: -include it and
+# export so recipe shells (the preflight domain guard below) see the real
+# values. The leading `-` keeps a missing .env from erroring; preflight is what
+# catches that.
+-include $(ENV_FILE)
+export
+
+# Host port the local stack publishes. Exported so compose interpolation
+# (${P6E_PORT:-8080}) resolves to the same value the local target prints.
+# Override per run: make local P6E_PORT=9090
+P6E_PORT ?= 8080
+export P6E_PORT
+
+BASE_COMPOSE  := docker compose --env-file $(ENV_FILE) -f docker-compose.yml
+LOCAL_COMPOSE := $(BASE_COMPOSE) -f docker-compose.local.yml
+PROD_COMPOSE  := $(BASE_COMPOSE) -f docker-compose.prod.yml
 
 # Quality gate. A ratchet: raise it as coverage improves, never lower it to
 # green a build.
@@ -30,7 +48,7 @@ LDFLAGS := -s -w \
 # ==================================================================================== #
 # PHONY DECLARATIONS (in alphabetical order)
 # ==================================================================================== #
-.PHONY: audit bench build ci clean confirm cover down fulltest help image logs race release test tidy tools up
+.PHONY: audit bench build ci clean confirm cover down fulltest help image local logs preflight race release test tidy tools up
 
 # ==================================================================================== #
 # STANDARD TARGETS (in alphabetical order)
@@ -80,9 +98,9 @@ cover:
 	@total=$$(go tool cover -func=coverage.out | awk '/^total:/ {print $$3}' | tr -d '%'); \
 	awk -v t="$$total" -v min="$(COVER_MIN)" 'BEGIN { if (t+0 < min+0) { printf "FAIL: coverage %.1f%% < %d%%\n", t, min; exit 1 } }'
 
-## down: stop the local stack
+## down: stop and remove the local stack
 down:
-	docker compose -f docker-compose.yml -f docker-compose.local.yml down
+	$(LOCAL_COMPOSE) down
 
 ## fulltest: run *all* tests with verbose output. use 'test' for short/unit tests only.
 fulltest:
@@ -101,9 +119,44 @@ image:
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-t $(BINARY):$(VERSION) .
 
+## local: start the local dev stack (published ports, fails fast)
+# The env file is created here rather than by a `$(ENV_FILE):` rule, and that is
+# load bearing. GNU make remakes any included makefile it has a rule for, so
+# `-include $(ENV_FILE)` plus such a rule would auto-create .env from the
+# template for *every* target, `up` and `preflight` included, and then restart.
+# The guard against booting prod on template defaults would silently never fire.
+local:
+	@test -f $(ENV_FILE) || { cp env.sample $(ENV_FILE); echo "created $(ENV_FILE) from env.sample"; }
+	$(LOCAL_COMPOSE) up -d --build
+	@echo "local stack up: http://localhost:$(P6E_PORT)  (admin on http://127.0.0.1:$${P6E_ADMIN_PORT:-8081})"
+
 ## logs: follow the local stack's logs
 logs:
-	docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f
+	$(LOCAL_COMPOSE) logs -f
+
+## preflight: fail unless .env holds production-ready values (gates `make up`)
+# Deliberately NOT a $(ENV_FILE) prerequisite: prod must never boot on template
+# defaults, so a missing .env is a hard failure rather than an auto-created
+# placeholder. That is what `make local` is for. The guards below rely on the
+# top-level `-include $(ENV_FILE)` + `export`, because make does not read .env.
+#
+# p6e has no admin password or signing secret to check: its only unsafe default
+# is the domain Traefik routes, and serving a stranger's hostname is the failure
+# this exists to prevent.
+preflight:
+	@test -f $(ENV_FILE) || { echo "$(ENV_FILE) missing: cp env.sample $(ENV_FILE) and fill it before prod" >&2; exit 1; }
+	@bad=""; \
+	[ -n "$$APEX_DOMAIN" ]                  || bad="$$bad\n  APEX_DOMAIN is empty (Traefik Host() rules need it)"; \
+	[ "$$APEX_DOMAIN" != example.invalid ]  || bad="$$bad\n  APEX_DOMAIN is still the env.sample default"; \
+	[ "$$APEX_DOMAIN" != example.com ]      || bad="$$bad\n  APEX_DOMAIN is still a placeholder"; \
+	[ -d "$${P6E_PIPELINES:-./examples}" ]  || bad="$$bad\n  P6E_PIPELINES does not exist: $${P6E_PIPELINES}"; \
+	case "$${P6E_PIPELINES:-./examples}" in ./examples|examples) \
+	  bad="$$bad\n  P6E_PIPELINES still points at the shipped examples, which include a deliberately broken pipeline and are not a deployment";; \
+	esac; \
+	if [ -n "$$bad" ]; then printf "preflight failed:$$bad\n" >&2; exit 1; fi; \
+	echo "preflight OK: $(ENV_FILE) looks production-ready"
+	@$(MAKE) --no-print-directory build
+	@./$(BIN_DIR)/$(BINARY) check --dir "$${P6E_PIPELINES:-./examples}"
 
 ## race: run tests under the race detector
 race:
@@ -131,9 +184,10 @@ tools:
 	@go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 	@echo "Tools installed in $(shell go env GOBIN || go env GOPATH)/bin"
 
-## up: build and run the local stack
-up:
-	docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
+## up: start the production stack in detached mode (gated by preflight)
+up: preflight
+	$(PROD_COMPOSE) up -d --build
+	@echo "prod stack up: routed via Traefik on www.$${APEX_DOMAIN}"
 
 # ==================================================================================== #
 # UTILITY TARGETS

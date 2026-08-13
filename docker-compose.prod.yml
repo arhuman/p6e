@@ -18,20 +18,43 @@ services:
       # an SSH tunnel can reach it while the internet cannot. Webhooks arrive
       # through the proxy instead.
       - "127.0.0.1:${P6E_ADMIN_PORT:-8081}:8081"
+    # List syntax rather than a mapping, matching the canonical 10x compose
+    # template. Both are valid docker-compose; staying with the canonical one
+    # keeps these labels greppable by the tooling that audits them.
     labels:
-      traefik.enable: "true"
+      - traefik.enable=true
       # The service is on more than one network, so the proxy must be told which
       # one to route over, or the choice is non-deterministic.
-      traefik.docker.network: proxy
-      traefik.http.services.p6e.loadbalancer.server.port: "8080"
+      - traefik.docker.network=proxy
+      - traefik.http.services.p6e.loadbalancer.server.port=8080
+
+      # Security headers, applied at the edge to both routers.
+      #
+      # This endpoint is machine-to-machine, so these do less than they would in
+      # front of a browser: HSTS is here to stop a caller being downgraded to
+      # plaintext and having its payload (and any token in it) read, not to
+      # protect a session cookie. The rest cost nothing and close the gap
+      # anyway, because "nobody points a browser at it" is an assumption about
+      # today rather than a property of the service.
+      - traefik.http.middlewares.p6e-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.p6e-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.p6e-headers.headers.stsPreload=true
+      - traefik.http.middlewares.p6e-headers.headers.forceSTSHeader=true
+      - traefik.http.middlewares.p6e-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.p6e-headers.headers.frameDeny=true
+      - traefik.http.middlewares.p6e-headers.headers.browserXssFilter=true
+      - traefik.http.middlewares.p6e-headers.headers.referrerPolicy=no-referrer
+
       # Canonical www plus a bare apex router, two routers onto one service.
-      traefik.http.routers.p6e.rule: "Host(`www.${APEX_DOMAIN:?set APEX_DOMAIN in .env}`)"
-      traefik.http.routers.p6e.entrypoints: websecure
-      traefik.http.routers.p6e.tls.certresolver: "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
-      traefik.http.routers.p6e.priority: "1"
-      traefik.http.routers.p6e-bare.rule: "Host(`${APEX_DOMAIN}`)"
-      traefik.http.routers.p6e-bare.entrypoints: websecure
-      traefik.http.routers.p6e-bare.tls.certresolver: "${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.p6e.rule=Host(`www.${APEX_DOMAIN:?set APEX_DOMAIN in .env}`)"
+      - traefik.http.routers.p6e.entrypoints=websecure
+      - traefik.http.routers.p6e.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.routers.p6e.priority=1
+      - traefik.http.routers.p6e.middlewares=p6e-headers@docker
+      - "traefik.http.routers.p6e-bare.rule=Host(`${APEX_DOMAIN}`)"
+      - traefik.http.routers.p6e-bare.entrypoints=websecure
+      - traefik.http.routers.p6e-bare.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.routers.p6e-bare.middlewares=p6e-headers@docker
     # A pipeline can shell out and make HTTP calls, so it is worth bounding what
     # one bad pipeline can take from the host. The step budget bounds goroutines
     # inside the process; this bounds the process itself.

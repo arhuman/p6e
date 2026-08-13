@@ -288,10 +288,20 @@ rejected, and `p6e check --dir` reports it.
 ## Running it as a service
 
 ```bash
-cp env.sample .env                 # then point P6E_PIPELINES at your directory
-make up                            # build and run the local stack
+make local                         # dev stack, ports published, creates .env
 make logs
 make down
+```
+
+For production, `make up` drives the prod overlay and is gated by
+`make preflight`, which refuses to start on a missing `.env`, a placeholder
+`APEX_DOMAIN`, or a pipeline directory that does not compile. It runs
+`p6e check --dir` for you, so a route collision stops the deploy rather than the
+daemon.
+
+```bash
+cp env.sample .env                 # set APEX_DOMAIN and P6E_PIPELINES
+make up
 ```
 
 The image is a static binary on alpine, about 8 MB, running as uid 1001. The
@@ -307,7 +317,8 @@ describes every pipeline in the process. Every compose overlay publishes it to
 `docker-compose.yml` is a neutral base with no host ports or restart policy;
 `docker-compose.local.yml` publishes ports and fails fast, and
 `docker-compose.prod.yml` joins an existing Traefik on an external `proxy`
-network, sets resource limits, and refuses to start on a placeholder domain.
+network, applies HSTS and baseline security headers at the edge, sets resource
+limits, and refuses to start on a placeholder domain.
 
 Validate a directory before deploying it, which is the same check the daemon
 runs at load time and the reason `--dir` exists:

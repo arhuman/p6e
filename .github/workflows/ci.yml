@@ -119,6 +119,59 @@ jobs:
             exit 1
           fi
 
+  scan:
+    name: image scan + SAST
+    runs-on: ubuntu-latest
+    # CodeQL needs this to upload its findings; trivy's SARIF goes the same way.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # SAST over the source. The engine runs local processes and makes outbound
+      # HTTP on a pipeline's instruction, so the interesting findings are in how
+      # it handles what a webhook body carries.
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: go
+      - uses: github/codeql-action/autobuild@v3
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:go
+
+      # Scan the image that actually ships, not a synthetic one: the alpine base
+      # and its packages are as much a part of the deployment as the binary.
+      - name: Build the image
+        run: make image
+      - name: Resolve the tag make image produced
+        id: img
+        run: echo "tag=p6e:$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.img.outputs.tag }}
+          format: sarif
+          output: trivy.sarif
+          # Report everything; fail the job only on what is actually fixable.
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: "0"
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+      - name: Fail on a fixable HIGH or CRITICAL
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.img.outputs.tag }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
   commitlint:
     name: commit messages
     runs-on: ubuntu-latest
