@@ -263,11 +263,46 @@ expected to change (multi-output ports, arity beyond two, interface-typed
 compatibility), and exporting them first would mean breaking anyone who built on
 them. ADR 0007 records the reasoning and the trigger for revisiting it.
 
+## Adding a trigger
+
+Triggers live in `internal/trigger` and are registered the same way nodes are,
+but they implement a different contract, because they are a different thing: a
+node is pulled once per run and returns a value, while a trigger is pushed by
+the world, fires an unbounded number of times, and lives as long as the process.
+
+A trigger declares what one event supplies, as named typed values. The compiler
+matches those against the pipeline's `inputs`, which is the whole integration:
+nothing else in the engine learns that triggers exist.
+
+There are two contracts, chosen by who owns the resource:
+
+- `SelfDriven` runs its own loop, as a schedule's timer does.
+- `HTTPDriven` is driven by the daemon's shared listener. A webhook cannot own
+  its socket, because one listener serves every webhook pipeline in the process
+  and the daemon routes by claim.
+
+A `Claim` is the process-wide resource a trigger needs to itself, such as
+`POST /hooks/deploy`. Two served pipelines making the same claim are both
+rejected, and `p6e check --dir` reports it.
+
 ## Status and non-goals
 
 V0, under active development; see `PLAN.md`. Deliberately absent: an
-expression or interpolation DSL, external module tiers, a scheduler, a
-persistence layer, distributed execution, and a visual editor.
+expression or interpolation DSL, external module tiers, distributed execution,
+and a visual editor.
+
+`p6e serve` runs a directory of pipelines, each when its trigger fires. It is
+deliberately small: interval schedules with no cron syntax, synchronous webhook
+replies with no execution store, and no queue anywhere. A trigger is not a node
+and not a step; it supplies the values a pipeline declares under `inputs`, which
+is why the executor knows nothing about triggers and why a triggered pipeline
+still runs by hand with `--input`. See ADR 0012.
+
+**Persistence is deferred rather than refused.** Nothing survives a run today,
+which is what keeps the daemon this small. Three things need that to change and
+are worth doing together if any of them is: asynchronous webhook replies (`202`
+plus an identifier), surviving a restart with work in flight, and run history.
+ADR 0012 records what is already shaped to accommodate it.
 
 There is also no dynamic `Any` type. One was allowed for in the design as an
 escape hatch, and no V0 node needed it, so it was not built. Adding it later
@@ -291,6 +326,8 @@ on.
   requests from data without an expression language.
 - `docs/adr/0011-parameterized-execution.md`: why an input is a graph node, and
   what it costs the compile-time guarantee.
+- `docs/adr/0012-triggered-pipelines-and-daemon-mode.md`: why a trigger supplies
+  a run's inputs rather than being a node, and what a long-lived process adds.
 - `docs/adr/0003-v0-baseline-performance.md`: the measurements behind the
   Performance section above.
 

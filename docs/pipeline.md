@@ -14,6 +14,7 @@ with V0.
 
 - [Document structure](#document-structure)
 - [Inputs](#inputs)
+- [Trigger](#trigger)
 - [Steps](#steps)
 - [`uses`](#uses)
 - [`needs`](#needs)
@@ -34,6 +35,13 @@ version: 1
 inputs:                          # optional
   <name>: <type>
 
+trigger:                         # optional
+  uses: <trigger capability>
+  with: <trigger configuration>
+  timeout: <duration>
+  respond_with: <step-id>
+  on_overlap: allow | drop
+
 steps:
   <step-id>:
     uses: <capability>
@@ -48,6 +56,7 @@ steps:
 |---|---|---|
 | `version` | yes | Must be `1`. It is the only schema version this build understands. |
 | `inputs` | no | A mapping of input name to type name. See [Inputs](#inputs). |
+| `trigger` | no | What starts a run when the pipeline is served. See [Trigger](#trigger). |
 | `steps` | yes | A mapping of step ID to step. Must contain at least one entry. |
 
 Two document-level rules:
@@ -121,8 +130,13 @@ value from a file. The declared type decides how the text is read:
 | `Bytes` | its bytes |
 | `Int` | a whole number |
 | `Bool` | `true` or `false` |
+| `Time` | an RFC 3339 instant, such as `2026-08-13T09:00:00Z` |
 
-Those four are what the command line can build. The engine accepts an input of
+`Time` is there so a scheduled pipeline can be run by hand: the daemon supplies
+the instant its schedule fired, and testing that pipeline offline means being
+able to name one.
+
+Those are what the command line can build. The engine accepts an input of
 any registered type, which an embedded caller can supply directly through
 `Options.Inputs`. A pipeline wanting a document from the command line declares
 `Bytes` and adds a `json.decode` step, which is the same explicit conversion
@@ -142,6 +156,139 @@ is for what varies **per environment**, and the machine provides it.
 
 Every declared input is required; there is no default. All of them are supplied
 per run, so a plan cannot carry one from a previous execution.
+
+## Trigger
+
+A trigger is what starts a run when the pipeline is served by `p6e serve`. A
+pipeline without one is perfectly valid: it is simply run by hand, and `serve`
+skips it.
+
+**A trigger is not a step.** It does not appear in the graph and nothing
+`needs` it. What it does is supply the values declared under
+[`inputs`](#inputs), and the compiler proves it supplies every one of them at
+the declared type. Nothing about an event's shape is left to be discovered on
+the first request.
+
+```yaml
+inputs:
+  body: Bytes                    # trigger.webhook supplies this as Bytes
+
+trigger:
+  uses: trigger.webhook
+  with:
+    path: /hooks/deploy
+    method: POST
+  timeout: 30s
+  respond_with: reply
+  on_overlap: allow
+```
+
+| Key | Required | Value |
+|---|---|---|
+| `uses` | yes | A trigger capability. `p6e triggers` lists them. |
+| `with` | no | The trigger's configuration, decoded strictly by the trigger itself. |
+| `timeout` | for webhooks | Bounds one run. Required for a trigger that answers a caller, because an unbounded run holds that caller's connection open indefinitely. |
+| `respond_with` | no | The step whose output becomes the reply. Only meaningful for a trigger that has somebody to answer. |
+| `on_overlap` | no | `allow` or `drop`. Defaults per kind of trigger, see below. |
+
+A pipeline may declare **at most one trigger**. Two triggers feeding one graph
+would mean a step accepting either payload type, and the type system is nominal
+with no union type and no `Any`. Two triggers means two files.
+
+### Testing a triggered pipeline
+
+Because a trigger only supplies inputs, a triggered pipeline runs by hand with
+no daemon and no traffic:
+
+```bash
+p6e run --input body=@event.json pipeline.yaml
+```
+
+This is the intended way to exercise one in CI. There is no separate facility
+for firing a trigger synthetically, because supplying inputs already is one.
+
+### Overlap
+
+What happens when a trigger fires while a run of the same pipeline is still
+going.
+
+| Policy | Effect |
+|---|---|
+| `allow` | Start the new run alongside the one in flight. |
+| `drop` | Refuse the event and let the run in flight finish. |
+
+The default depends on the kind of trigger. One that answers a caller defaults
+to `allow`, because that caller is already waiting on its own event and refusing
+it for an unrelated one would be surprising. Everything else defaults to `drop`,
+which is the cron convention and the only default that cannot pile runs up
+faster than they finish.
+
+There is no queue. A queue turns a fast rejection into a slow timeout, and an
+unbounded one is how a daemon dies.
+
+### Responding
+
+`respond_with` names the step whose output is written back. That step must
+produce `Bytes` or `Text`: turning a structure into bytes is a step's job, so a
+pipeline answering JSON ends in `json.encode`. Naming a step that produces
+anything else is a compile error, as is naming an input, a step that does not
+exist, or using `respond_with` at all on a trigger with nobody to answer.
+
+Replies are synchronous. There is no "202 plus an identifier" mode, because
+collecting a result later means storing executions and the daemon keeps nothing
+after a run ends. That is deferred rather than refused: see ADR 0012 for what it
+would take and what is already shaped to allow it.
+
+### `trigger.webhook`
+
+Runs the pipeline once per matching HTTP request.
+
+- **Kind:** answers a caller, so `timeout` is required and `respond_with` is
+  available.
+- **Claim:** the method and path, for example `POST /hooks/deploy`. Two served
+  pipelines cannot claim the same one.
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `path` | string | yes | | Must start with `/`. |
+| `method` | string | no | `POST` | One of GET, POST, PUT, PATCH, DELETE. Case insensitive. |
+| `max_body` | int | no | 1 MiB | Bytes. A larger body is refused before any step runs. |
+
+Supplies:
+
+| Name | Type | Value |
+|---|---|---|
+| `body` | `Bytes` | The request body. |
+| `method` | `Text` | The request method. |
+| `path` | `Text` | The request path. |
+| `query` | `Text` | The raw query string. |
+
+Declare only what the pipeline consumes; the rest are unused.
+
+The inbound request is deliberately **not** supplied as an `HTTPRequest`. That
+type describes a call to make, and an inbound request is not one; sharing it
+would let a pipeline forward whatever arrived straight back out.
+
+### `trigger.schedule`
+
+Runs the pipeline once per interval.
+
+- **Kind:** answers nobody, so `timeout` is optional and `respond_with` is
+  rejected.
+- **Claim:** none. Any number of schedules coexist.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `every` | duration string | yes | At least 1ms. |
+
+Supplies:
+
+| Name | Type | Value |
+|---|---|---|
+| `fired_at` | `Time` | The instant the tick happened. |
+
+There is no cron syntax. Cron means a parser and a timezone database, which is a
+dependency and a decision of its own.
 
 ## Steps
 
@@ -1194,8 +1341,13 @@ cycle.yaml: 4 problems:
 
 ```
 p6e check <pipeline.yaml>   compile and validate without running
+p6e check --dir <dir>       compile a whole directory, and report two pipelines
+                            claiming one route
 p6e run   <pipeline.yaml>   compile, then execute
+p6e serve <dir>             run every pipeline in a directory that declares a
+                            trigger, each when its trigger fires
 p6e nodes                   list the available node capabilities
+p6e triggers                list the available trigger capabilities
 ```
 
 Options for `run`:
@@ -1206,8 +1358,47 @@ Options for `run`:
 | `--detect-mutation` | Report nodes that mutate a value they do not own. Expensive: for debugging, not production. |
 | `--inline` | Run a solitary ready step on the main goroutine. Much faster on sequential pipelines, but a node that ignores cancellation will wedge the run instead of being abandoned. |
 
+Options for `serve`:
+
+| Option | Effect |
+|---|---|
+| `--listen ADDR` | Address for webhook triggers. Default `:8080`. |
+| `--max-concurrency N` | Steps in flight across every pipeline at once, not pipelines. Default 256. |
+| `--drain DURATION` | How long to wait for runs in progress on shutdown. Default 30s. |
+
 Exit codes: `0` success, `1` a broken pipeline or a failed run, `2` a broken
 invocation.
+
+### `check --dir` against `serve`
+
+Both compile a directory and both report the same problems. They differ in what
+a problem means:
+
+| | A file that will not compile | Two pipelines claiming one route |
+|---|---|---|
+| `serve` | Logged and skipped, the rest are served | Both rejected, the rest are served |
+| `check --dir` | Fails | Fails |
+
+`serve` keeps going because one typo must not stop every unrelated webhook from
+answering. `check --dir` fails because it is the CI gate, and a route collision
+is the one problem no single-file check can see: without it, a collision is only
+discoverable by deploying and noticing that a webhook stopped firing.
+
+Rejecting *both* claimants rather than picking one is deliberate. Serving
+whichever sorted first would mean a pipeline quietly answering requests meant
+for its neighbour, and the only symptom would be the neighbour never running.
+
+### Serving
+
+`p6e serve` starts one listener for every webhook pipeline, routing by claim,
+and a timer per schedule. On SIGTERM or SIGINT it stops accepting events, lets
+the runs already going finish, and gives up after `--drain`.
+
+A pipeline whose runs abandon a step three times in a row is quarantined: it
+stops firing and the reason is logged. An abandoned step is one still running
+after its run gave up on it, which happens when a node ignores its context; the
+goroutine cannot be stopped and, unlike a CLI run, a daemon does not exit
+shortly afterwards.
 
 ## A complete example
 
@@ -1278,4 +1469,6 @@ rejection looks like).
 - `docs/adr/0004-bounding-the-executor.md`: concurrency caps and abandonment.
 - `docs/adr/0006-detecting-mutation.md`: `--detect-mutation`.
 - `docs/adr/0008-inline-solo-steps.md`: `--inline`.
+- `docs/adr/0012-triggered-pipelines-and-daemon-mode.md`: why a trigger supplies
+  inputs rather than being a node, and what `serve` adds.
 - `README.md`: the engine's design, and how to write a node.
