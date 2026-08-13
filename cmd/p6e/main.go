@@ -32,19 +32,34 @@ const usage = `p6e compiles and runs typed pipelines.
 
 Usage:
   p6e check <pipeline.yaml>   compile and validate without running
+  p6e check --dir <dir>       compile every pipeline in a directory, and report
+                              two pipelines claiming one route. Any problem
+                              fails the command, which is what CI wants.
   p6e run   <pipeline.yaml>   compile, then execute
+  p6e serve <dir>             run every pipeline in a directory that declares a
+                              trigger, each when its trigger fires
   p6e nodes                   list the available node capabilities
+  p6e triggers                list the available trigger capabilities
 
 Options for run:
   --input NAME=VALUE          supply a value the pipeline declared under inputs.
                               NAME=@FILE reads the value from a file. Repeat the
-                              option once per declared input.
+                              option once per declared input. A triggered
+                              pipeline takes its inputs this way too, which is
+                              how one is tested without a daemon.
   --detect-mutation           report nodes that mutate a value they do not own.
                               Expensive: for debugging, not production.
   --inline                    run a solitary ready step on the main goroutine.
                               Much faster on sequential pipelines, but a node
                               that ignores cancellation will wedge the run
                               instead of being abandoned.
+
+Options for serve:
+  --listen ADDR               address for webhook triggers (default :8080)
+  --max-concurrency N         steps in flight across every pipeline at once,
+                              not pipelines (default 256)
+  --drain DURATION            how long to wait for runs in progress on shutdown
+                              (default 30s)
 `
 
 // Exit codes, so a caller can tell a broken pipeline from a broken invocation.
@@ -66,9 +81,37 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	switch args[0] {
 	case "check":
+		if dir, ok := dirArg(args[1:]); ok {
+			if dir == "" {
+				fmt.Fprintf(stderr, "check --dir takes exactly one directory\n\n%s", usage)
+				return exitUsage
+			}
+			return checkDirCommand(dir, stdout, stderr)
+		}
 		return withFile(args, stderr, func(path string) int {
 			return checkCommand(path, stdout, stderr)
 		})
+
+	case "serve":
+		dirs, serveOpts, unknown, err := splitServeArgs(args[1:])
+		switch {
+		case unknown != "":
+			fmt.Fprintf(stderr, "unknown option %q\n\n%s", unknown, usage)
+			return exitUsage
+		case err != nil:
+			fmt.Fprintf(stderr, "%v\n", err)
+			return exitUsage
+		case len(dirs) != 1:
+			fmt.Fprintf(stderr, "serve takes exactly one directory\n\n%s", usage)
+			return exitUsage
+		}
+		return serveCommand(ctx, dirs[0], serveOpts, stdout, stderr)
+
+	case "triggers":
+		for _, name := range trigger.Builtins().Names() {
+			fmt.Fprintln(stdout, name)
+		}
+		return exitOK
 	case "run":
 		files, runOpts, rawInputs, unknown := splitRunArgs(args[1:])
 		if unknown != "" {
@@ -176,13 +219,24 @@ func buildInputs(plan *pipeline.ExecutionPlan, assignments []string) (map[string
 
 // convertInput builds a value of the declared type from the command line's text.
 //
-// The CLI supplies the four types it can read from a string. The engine itself
+// The CLI supplies the types it can read from a string. The engine itself
 // accepts an input of any registered type, which an embedder can supply
 // directly; a pipeline wanting a document from the command line declares Bytes
 // and decodes it with a step, which is the same explicit conversion every other
 // edge makes.
+//
+// Time is here so that a scheduled pipeline can be run by hand: the daemon
+// supplies the instant a schedule fired, and testing that pipeline offline
+// means being able to name one.
 func convertInput(typ node.TypeID, literal string) (node.Value, error) {
 	switch typ {
+	case "Time":
+		t, err := time.Parse(time.RFC3339, strings.TrimSpace(literal))
+		if err != nil {
+			return node.Value{}, fmt.Errorf("%q is not an RFC 3339 time such as %q",
+				literal, "2026-08-13T09:00:00Z")
+		}
+		return node.NewValue(&types.Time{Value: t}), nil
 	case "Text":
 		return node.NewValue(&types.Text{Value: literal}), nil
 	case "Bytes":
@@ -201,7 +255,7 @@ func convertInput(typ node.TypeID, literal string) (node.Value, error) {
 		return node.NewValue(&types.Int{Value: n}), nil
 	default:
 		return node.Value{}, fmt.Errorf(
-			"the command line cannot build a %s; it supplies Text, Bytes, Bool and Int", typ)
+			"the command line cannot build a %s; it supplies Text, Bytes, Bool, Int and Time", typ)
 	}
 }
 
@@ -220,6 +274,25 @@ func registries() *pipeline.Registries {
 func nameOf(path string) string {
 	base := filepath.Base(path)
 	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+// dirArg reports whether the arguments select a directory rather than a file,
+// accepting both "--dir x" and "--dir=x". The returned path is empty when --dir
+// was given without a usable directory.
+func dirArg(args []string) (dir string, ok bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	if value, found := strings.CutPrefix(args[0], "--dir="); found {
+		return value, true
+	}
+	if args[0] != "--dir" {
+		return "", false
+	}
+	if len(args) != 2 {
+		return "", true
+	}
+	return args[1], true
 }
 
 func withFile(args []string, stderr io.Writer, fn func(path string) int) int {

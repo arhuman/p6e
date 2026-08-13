@@ -1,0 +1,54 @@
+# A schedule: run this pipeline every five minutes.
+#
+#   p6e serve examples/
+#
+# The engine has no cron syntax, and deliberately so: cron means a parser and a
+# timezone database, which is a dependency and a decision of its own. An
+# interval covers what a daemon of this size is for.
+#
+# Nothing is waiting on a scheduled run, so it needs no timeout and answers
+# nobody: respond_with is meaningless here and rejected at compile time. Its
+# overlap policy defaults to drop, so a run that outlasts its interval is not
+# joined by the next one.
+#
+# Testing it by hand needs no daemon, only the instant it would have fired:
+#
+#   p6e run --input fired_at=2026-08-13T09:00:00Z examples/schedule.yaml
+
+version: 1
+
+inputs:
+  # trigger.schedule supplies the moment the tick happened, which is the one
+  # thing the pipeline cannot work out for itself afterwards.
+  fired_at: Time
+
+trigger:
+  uses: trigger.schedule
+  with:
+    every: 5m
+
+steps:
+  request:
+    uses: http.build
+    with:
+      url: https://api.github.com/repos/golang/go
+      headers:
+        Accept: application/vnd.github+json
+
+  fetch:
+    uses: http.request
+    needs: [request]
+    with:
+      timeout: 10s
+    retry:
+      max_attempts: 3
+      backoff: 200ms
+
+  # A non-2xx is data until a step says otherwise. This is where it becomes the
+  # run's outcome, which the daemon logs as a failure.
+  ok:
+    uses: http.assert_status
+    needs: [fetch]
+    with:
+      min: 200
+      max: 299

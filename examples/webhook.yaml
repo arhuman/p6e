@@ -1,0 +1,74 @@
+# A webhook: run this pipeline for every POST to /hooks/deploy, and answer the
+# caller with what it produced.
+#
+#   p6e serve examples/
+#   curl -XPOST localhost:8080/hooks/deploy -d '{"ref":"refs/heads/main"}'
+#
+# A trigger is not a step. It supplies the values declared under `inputs`, and
+# `p6e check` proves it supplies every one of them at the declared type, so
+# nothing about the event's shape is discovered on the first request.
+#
+# That also means this pipeline runs perfectly well by hand, which is how one is
+# tested without standing up a daemon and sending it traffic:
+#
+#   p6e run --input body=@examples/testdata/push.json examples/webhook.yaml
+
+version: 1
+
+inputs:
+  # trigger.webhook supplies body, method, path and query. Declare the ones this
+  # pipeline consumes; the rest are simply unused.
+  body: Bytes
+
+trigger:
+  uses: trigger.webhook
+  with:
+    path: /hooks/deploy
+    method: POST
+  # Required, because a caller holds a connection open until the run ends.
+  timeout: 30s
+  # The step whose output becomes the response body. It has to produce Bytes or
+  # Text: turning a structure into bytes is a step's job, not the engine's.
+  respond_with: reply
+  # Already the default for a webhook, since each caller waits on its own event.
+  # Schedules default to drop instead.
+  on_overlap: allow
+
+steps:
+  event:
+    uses: json.decode
+    needs: [body]
+
+  # A payload with no ref is not a branch push. The assertion fails the run, and
+  # a failed step stops everything, so no branching is needed to reject it.
+  is_branch_push:
+    uses: condition
+    needs: [event]
+    with:
+      path: ref
+      exists: true
+
+  require_branch_push:
+    uses: assert.true
+    needs: [is_branch_push]
+    with:
+      message: payload carries no ref, so this is not a branch push
+
+  # The default is what makes the rejection deterministic. Without it this step
+  # and the assertion would both fail on a payload with no ref, concurrently,
+  # and whichever lost the race would decide the caller's status code. With it,
+  # exactly one step can fail and the answer is always the assertion's.
+  ref:
+    uses: json.get
+    needs: [event]
+    with:
+      path: ref
+      as: Text
+      default: ""
+
+  reply:
+    uses: text.format
+    with:
+      template: '{"status":"accepted","ref":"{{ref}}"}'
+    needs:
+      ref: ref

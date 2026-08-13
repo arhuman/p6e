@@ -35,6 +35,7 @@ func TestExamplesCompile(t *testing.T) {
 	for _, name := range []string{
 		"json.yaml", "exec.yaml", "http.yaml",
 		"chaining.yaml", "monitor.yaml", "parameterized.yaml",
+		"webhook.yaml", "schedule.yaml",
 	} {
 		code, stdout, stderr := invoke(t, "check", filepath.Join("..", "..", "examples", name))
 		if code != exitOK {
