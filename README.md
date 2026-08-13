@@ -214,7 +214,7 @@ the workflow failed is a decision only the workflow can make, typically with a
 | `exec.stderr` | `CommandResult` | `Bytes` | Extracts the error stream. |
 | `exec.exit_code` | `CommandResult` | `Int` | Puts the exit code on an edge, which is what makes it data a workflow can read. |
 | `http.build` | (none) | `HTTPRequest` | Builds a request from `with.method`/`with.url`/`with.headers`/`with.body`; the URL is validated at compile time. |
-| `http.request` | `HTTPRequest` | `HTTPResponse` | Shared `http.Client`; a timeout is transient, a non-2xx status is data. |
+| `http.request` | `HTTPRequest` | `HTTPResponse` | Shared `http.Client`; a timeout is transient, a non-2xx status is data. Internal destinations are refused unless `with.allow_private` (ADR 0014). |
 | `http.body` | `HTTPResponse` | `Bytes` | Extracts the body. |
 | `http.status` | `HTTPResponse` | `Int` | Puts the status code on an edge, which is what makes it data a workflow can read. |
 | `http.header` | `HTTPResponse` | `Text` | Reads one header by `with.name`; an absent one is an error unless `with.default` is set. |
@@ -299,6 +299,31 @@ There are two contracts, chosen by who owns the resource:
 A `Claim` is the process-wide resource a trigger needs to itself, such as
 `POST /hooks/deploy`. Two served pipelines making the same claim are both
 rejected, and `p6e check --dir` reports it.
+
+**A webhook authenticates nothing unless you say so.** Give the trigger an
+`auth` block and every event must carry a valid HMAC-SHA256 signature over the
+raw body before any run starts:
+
+```yaml
+trigger:
+  uses: trigger.webhook
+  with:
+    path: /hooks/deploy
+    auth:
+      scheme: hmac-sha256
+      header: X-Hub-Signature-256
+      prefix: "sha256="
+      secret_env: DEPLOY_WEBHOOK_SECRET
+  timeout: 30s
+```
+
+The secret is named rather than inlined, so it stays out of the pipeline
+directory and `p6e check` still needs no secrets: the block is validated at
+compile time and the variable is read per request. A rejected event gets `401`
+and nothing else, because telling a sender which half of the signature was wrong
+tells an attacker which half to work on; the reason goes to the log. Without an
+`auth` block the route is open, and the daemon says so at startup, naming every
+open route. See ADR 0013.
 
 ## Running it as a service
 
@@ -385,6 +410,10 @@ on.
   what it costs the compile-time guarantee.
 - `docs/adr/0012-triggered-pipelines-and-daemon-mode.md`: why a trigger supplies
   a run's inputs rather than being a node, and what a long-lived process adds.
+- `docs/adr/0013-webhook-authentication.md`: why signature verification is a
+  trigger concern rather than a node or a job for the proxy.
+- `docs/adr/0014-outbound-destination-policy.md`: why a request built from data
+  cannot reach inside the deployment, and why the check lives in the dialer.
 - `docs/adr/0003-v0-baseline-performance.md`: the measurements behind the
   Performance section above.
 
