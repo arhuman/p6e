@@ -69,10 +69,8 @@ EXPOSE 8080 8081
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD wget -q --spider http://127.0.0.1:8081/healthz || exit 1
 
-# No org.opencontainers.image.licenses label: the repo carries no LICENSE file,
-# and a label claiming one the project has not chosen is worse than none. Add
-# both together.
 LABEL org.opencontainers.image.source="https://github.com/arhuman/p6e" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.title="p6e" \
       org.opencontainers.image.description="Typed, low-latency pipeline execution engine"
 
