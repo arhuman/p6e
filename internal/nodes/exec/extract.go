@@ -53,19 +53,8 @@ func ExitCodeDefinition() node.Definition {
 // block is rejected rather than ignored, so a misplaced key fails at check time
 // instead of quietly doing nothing.
 func extractor[O any](name string, read func(*types.CommandResult) O) node.Definition {
-	n := node.NewTypedNode(name,
+	return node.Static(name, node.NewTypedNode(name,
 		func(_ context.Context, _ *node.ExecutionContext, result *types.CommandResult) node.Result[O] {
 			return node.Ok(read(result))
-		})
-	return node.Definition{
-		Name: name,
-		New: func(cfg node.Config) (node.RuntimeNode, error) {
-			var empty struct{}
-			if err := cfg.Decode(&empty); err != nil {
-				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
-					"%s takes no configuration", name)
-			}
-			return n, nil
-		},
-	}
+		}))
 }

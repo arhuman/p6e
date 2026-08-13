@@ -121,21 +121,10 @@ func WithHeaderDefinition() node.Definition {
 // http.with_header this produces a new request, and it shares the original's
 // headers rather than copying them, which is safe because nothing mutates them.
 func WithBodyDefinition() node.Definition {
-	n := node.NewTypedNode2(WithBodyName,
+	return node.Static(WithBodyName, node.NewTypedNode2(WithBodyName,
 		func(_ context.Context, _ *node.ExecutionContext, req *types.Request, body *types.Bytes) node.Result[*types.Request] {
 			next := *req
 			next.Body = body.Value
 			return node.Ok(&next)
-		})
-	return node.Definition{
-		Name: WithBodyName,
-		New: func(cfg node.Config) (node.RuntimeNode, error) {
-			var empty struct{}
-			if err := cfg.Decode(&empty); err != nil {
-				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
-					"%s takes no configuration", WithBodyName)
-			}
-			return n, nil
-		},
-	}
+		}))
 }

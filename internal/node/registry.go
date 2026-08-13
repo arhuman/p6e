@@ -39,10 +39,26 @@ type Definition struct {
 }
 
 // Static builds a Definition for a node that takes no configuration.
+//
+// A with block is rejected rather than ignored, so a misplaced key fails at
+// check time instead of quietly doing nothing. That is the same bargain every
+// configured node makes through Config.Decode, and a node taking no
+// configuration is the case where silently ignoring a typo would be easiest to
+// miss.
+//
+// n is built once and shared by every step that uses the capability, so it must
+// be safe for concurrent use.
 func Static(name string, n RuntimeNode) Definition {
 	return Definition{
 		Name: name,
-		New:  func(Config) (RuntimeNode, error) { return n, nil },
+		New: func(cfg Config) (RuntimeNode, error) {
+			var empty struct{}
+			if err := cfg.Decode(&empty); err != nil {
+				return nil, Wrap(err, KindInvalidInput, "bad_config",
+					"%s takes no configuration", name)
+			}
+			return n, nil
+		},
 	}
 }
 

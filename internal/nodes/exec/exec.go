@@ -32,17 +32,7 @@ const killGrace = 500 * time.Millisecond
 // It takes no configuration. A with block is rejected rather than ignored, so a
 // typo in a pipeline file fails at check time instead of quietly doing nothing.
 func Definition() node.Definition {
-	return node.Definition{
-		Name: Name,
-		New: func(cfg node.Config) (node.RuntimeNode, error) {
-			var empty struct{}
-			if err := cfg.Decode(&empty); err != nil {
-				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
-					"%s takes no configuration", Name)
-			}
-			return runner, nil
-		},
-	}
+	return node.Static(Name, runner)
 }
 
 // runner holds nothing, so one instance serves every step and every concurrent

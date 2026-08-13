@@ -21,21 +21,10 @@ const (
 //
 // It takes no configuration. A with block is rejected rather than ignored.
 func StatusDefinition() node.Definition {
-	n := node.NewTypedNode(StatusName,
+	return node.Static(StatusName, node.NewTypedNode(StatusName,
 		func(_ context.Context, _ *node.ExecutionContext, resp *types.Response) node.Result[*types.Int] {
 			return node.Ok(&types.Int{Value: int64(resp.Status)})
-		})
-	return node.Definition{
-		Name: StatusName,
-		New: func(cfg node.Config) (node.RuntimeNode, error) {
-			var empty struct{}
-			if err := cfg.Decode(&empty); err != nil {
-				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
-					"%s takes no configuration", StatusName)
-			}
-			return n, nil
-		},
-	}
+		}))
 }
 
 // headerConfig is an http.header step's with block.

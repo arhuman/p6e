@@ -21,18 +21,7 @@ const EncodeName = "json.encode"
 // that is silently ignored produces a pipeline that checks clean and then does
 // something other than what it says.
 func EncodeDefinition() node.Definition {
-	n := node.NewTypedNode(EncodeName, encode)
-	return node.Definition{
-		Name: EncodeName,
-		New: func(cfg node.Config) (node.RuntimeNode, error) {
-			var empty struct{}
-			if err := cfg.Decode(&empty); err != nil {
-				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
-					"%s takes no configuration", EncodeName)
-			}
-			return n, nil
-		},
-	}
+	return node.Static(EncodeName, node.NewTypedNode(EncodeName, encode))
 }
 
 // encode marshals the document's root.

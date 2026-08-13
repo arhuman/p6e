@@ -13,23 +13,16 @@ import (
 	"github.com/arhuman/p6e/internal/nodes/types"
 )
 
+// DecodeName is the capability a pipeline references with "uses: json.decode".
+const DecodeName = "json.decode"
+
 // DecodeDefinition is the "json.decode" capability: Bytes to JSONDocument.
 //
 // It takes no configuration. A with block is still rejected, because a typo
 // that is silently ignored produces a pipeline that checks clean and then does
 // something other than what it says.
 func DecodeDefinition() node.Definition {
-	n := node.NewTypedNode("json.decode", decode)
-	return node.Definition{
-		Name: "json.decode",
-		New: func(cfg node.Config) (node.RuntimeNode, error) {
-			var c struct{}
-			if err := cfg.Decode(&c); err != nil {
-				return nil, err
-			}
-			return n, nil
-		},
-	}
+	return node.Static(DecodeName, node.NewTypedNode(DecodeName, decode))
 }
 
 // decode unmarshals the payload into a Document whose Root is whatever the

@@ -143,8 +143,9 @@ a panic; it carries a `Kind` (`transient`, `permanent`, `invalid_input`,
 (node.RuntimeNode, error)` runs once per step, at compile time, never during
 execution, which is what lets configuration decoding and validation happen
 ahead of the hot path. `node.Static(name, n)` is the shortcut for a node that
-takes no configuration; a node that must reject a stray `with` block decodes
-into an empty struct instead, the way `json.decode` does. A type that crosses
+takes no configuration, and it rejects a stray `with` block rather than
+ignoring one, so a misplaced key fails at check time instead of quietly doing
+nothing. A type that crosses
 an edge needs a stable name for pipeline files and error messages, given by
 `node.RegisterType[T](name string) node.TypeID` from an `init` function, for
 example `node.RegisterType[*types.Text]("Text")`.

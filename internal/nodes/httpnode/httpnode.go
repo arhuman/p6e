@@ -108,17 +108,7 @@ func RequestDefinition() node.Definition {
 // The body is shared, not copied: the Bytes it produces points at the same
 // backing array as the response, which is safe because values are immutable.
 func BodyDefinition() node.Definition {
-	return node.Definition{
-		Name: BodyName,
-		New: func(cfg node.Config) (node.RuntimeNode, error) {
-			var empty struct{}
-			if err := cfg.Decode(&empty); err != nil {
-				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
-					"%s takes no configuration", BodyName)
-			}
-			return bodyNode, nil
-		},
-	}
+	return node.Static(BodyName, bodyNode)
 }
 
 var bodyNode = node.NewTypedNode(BodyName,
