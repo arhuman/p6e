@@ -43,7 +43,24 @@ type Options struct {
 	ExecutionID string
 	// MaxConcurrency caps how many steps execute at once. Zero selects
 	// DefaultMaxConcurrency. One makes execution sequential.
+	//
+	// It bounds this run alone. A process running many pipelines at once wants
+	// Slots as well: forty plans each entitled to 256 steps is not a bound.
 	MaxConcurrency int
+	// Slots is a semaphore shared by every run that should compete for one
+	// budget, as a daemon's runs do. A step holds one slot for as long as it
+	// runs, so this bounds concurrent steps across the whole process rather
+	// than concurrent pipelines, which is the quantity that actually costs
+	// goroutines. Build one with NewSlots.
+	//
+	// Nil means unshared, which is the single-run case: MaxConcurrency is then
+	// the only bound and no slot is ever taken.
+	//
+	// A step abandoned under AbandonAfter keeps its slot until it really
+	// finishes. That is deliberate: the work is still running and still costing
+	// the process, and pretending otherwise would let a wedged node quietly
+	// raise the ceiling for everyone else.
+	Slots chan struct{}
 	// AbandonAfter caps how long Run waits for steps still running after the
 	// execution has failed or been cancelled. Zero selects
 	// DefaultAbandonAfter.
@@ -65,6 +82,15 @@ type Options struct {
 	// honour cancellation, and leave it off when running anything you do not
 	// control (ADR 0008).
 	InlineSoloSteps bool
+}
+
+// NewSlots builds the shared step budget described by Options.Slots. Size must
+// be positive; a zero-capacity pool would let nothing run at all.
+func NewSlots(size int) chan struct{} {
+	if size <= 0 {
+		panic("runtime: slot pool size must be positive")
+	}
+	return make(chan struct{}, size)
 }
 
 var executionCounter atomic.Uint64
@@ -160,18 +186,54 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 		return in
 	}
 
+	// tryTake claims a slot in the shared pool without waiting. Failing is
+	// ordinary: it means the process is busy, and the caller waits on the
+	// pool inside the main select rather than blocking here.
+	slots := opts.Slots
+	tryTake := func() bool {
+		if slots == nil {
+			return true
+		}
+		select {
+		case slots <- struct{}{}:
+			return true
+		default:
+			return false
+		}
+	}
+	// launch starts a step that already holds a slot, and returns it once the
+	// step is finished rather than when the execution moves on.
+	//
+	// The release is written out here rather than called through a helper
+	// because this closure escapes to a goroutine, and a helper it captured
+	// would escape with it: one heap allocation per run, on the path ADR 0003
+	// measures.
+	//
+	// Capturing slots at all costs 16 bytes per step, because it pushes this
+	// closure into the next size class. Allocation count and time are
+	// unchanged. The alternative was releasing from the coordinator when the
+	// completion arrives, which is cheaper and wrong: an abandoned step is
+	// still running, and handing its slot back would let a wedged node quietly
+	// raise the ceiling for every other pipeline.
 	launch := func(i int) {
 		in := prepare(i)
 		step := &plan.Steps[i]
 		inflight++
 		go func() {
 			done <- completion{index: i, result: runStep(runCtx, step, &contexts[i], in)}
+			if slots != nil {
+				<-slots
+			}
 		}()
 	}
 
-	// pump starts as much ready work as the concurrency cap allows.
+	// pump starts as much ready work as the caps allow, stopping at the first
+	// step it cannot claim a slot for.
 	pump := func() {
 		for launched < len(ready) && inflight < maxConcurrency {
+			if !tryTake() {
+				return
+			}
 			launch(ready[launched])
 			launched++
 		}
@@ -239,22 +301,48 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 		// are most of what a step costs. The cost is that the coordinator is
 		// inside the node while it runs and cannot abandon it, which is why this
 		// is opt-in.
-		if opts.InlineSoloSteps && !stopped && inflight == 0 && len(ready)-launched == 1 {
+		if opts.InlineSoloSteps && !stopped && inflight == 0 && len(ready)-launched == 1 && tryTake() {
 			i := ready[launched]
 			launched++
 			in := prepare(i)
-			handle(completion{index: i, result: runStep(runCtx, &plan.Steps[i], &contexts[i], in)})
+			result := runStep(runCtx, &plan.Steps[i], &contexts[i], in)
+			if slots != nil {
+				<-slots
+			}
+			handle(completion{index: i, result: result})
 			continue
 		}
 
 		if !stopped {
 			pump()
 		}
-		if inflight == 0 {
+
+		// waiting is the shared pool arm of the select, enabled only when this
+		// run has work it could start but could not claim a slot for. A nil
+		// channel disables the arm, which is how a run that needs nothing from
+		// the pool never touches it.
+		//
+		// The claim belongs in the select rather than in a blocking take: a run
+		// whose caller has given up must not sit waiting for a slot that some
+		// other pipeline might hold for minutes. Cancellation and abandonment
+		// stay reachable at every moment.
+		var waiting chan<- struct{}
+		if !stopped && launched < len(ready) && inflight < maxConcurrency {
+			waiting = slots
+		}
+		// Nothing running and nothing startable means the graph is finished.
+		// With a slot outstanding it means the opposite: there is work to do and
+		// the process is full, so this run waits rather than declaring itself
+		// done and skipping the rest.
+		if inflight == 0 && waiting == nil {
 			break
 		}
 
 		select {
+		case waiting <- struct{}{}:
+			launch(ready[launched])
+			launched++
+
 		case c := <-done:
 			inflight--
 			handle(c)
