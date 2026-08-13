@@ -47,7 +47,12 @@ func (e *CompileError) Error() string {
 //
 // name identifies the workflow in execution contexts and reports.
 func Compile(f *File, reg *node.Registry, name string) (*ExecutionPlan, error) {
-	c := &compiler{file: f, reg: reg, ids: f.StepIDs()}
+	// Inputs lead, then steps, each group sorted. They share one namespace and
+	// one index space, so a dependency on an input needs no special case
+	// anywhere after this point.
+	inputs := f.InputNames()
+	c := &compiler{file: f, reg: reg, inputs: inputs}
+	c.ids = append(append(make([]string, 0, len(inputs)+len(f.Steps)), inputs...), f.StepIDs()...)
 	c.index = make(map[string]int, len(c.ids))
 	for i, id := range c.ids {
 		c.index[id] = i
@@ -58,6 +63,7 @@ func Compile(f *File, reg *node.Registry, name string) (*ExecutionPlan, error) {
 	// against, but its neighbours still do. Returning after the first phase that
 	// found anything would hide a type error behind an unrelated typo in a with
 	// block, which defeats the point of collecting problems at all.
+	c.resolveInputs()
 	c.resolve()
 	c.checkDependencies()
 	c.checkCycles()
@@ -75,6 +81,11 @@ type compiler struct {
 	ids   []string
 	index map[string]int
 
+	// inputs are the leading entries of ids, and inputTypes holds the type each
+	// one declares, indexed the same way.
+	inputs     []string
+	inputTypes []node.TypeID
+
 	nodes []node.RuntimeNode
 	// deps holds each step's dependencies as indices in port order, resolved
 	// from either needs form by checkEdges and reused when building the plan.
@@ -86,12 +97,48 @@ func (c *compiler) fail(step, format string, args ...any) {
 	c.problems = append(c.problems, Problem{Step: step, Message: fmt.Sprintf(format, args...)})
 }
 
+// resolveInputs checks that each declared type exists. A type is a name in a
+// registry, so a typo like "Byte" is caught here rather than at the first run
+// that supplies a value nothing can consume.
+func (c *compiler) resolveInputs() {
+	c.inputTypes = make([]node.TypeID, len(c.inputs))
+	for i, name := range c.inputs {
+		declared := node.TypeID(c.file.Inputs[name])
+		if _, ok := node.LookupType(declared); !ok {
+			c.fail("", "input %q declares type %q, which is not a registered type",
+				name, declared)
+			continue
+		}
+		c.inputTypes[i] = declared
+	}
+}
+
+// isInput reports whether an index addresses a declared input rather than a
+// step. Inputs occupy the leading positions of ids.
+func (c *compiler) isInput(i int) bool { return i < len(c.inputs) }
+
+// outputType is what an edge leaving this graph node carries. The empty TypeID
+// means it could not be determined, which only happens after a failure that was
+// already reported.
+func (c *compiler) outputType(i int) node.TypeID {
+	if c.isInput(i) {
+		return c.inputTypes[i]
+	}
+	if c.nodes[i] == nil {
+		return ""
+	}
+	return c.nodes[i].Descriptor().Output.Type
+}
+
 // resolve looks every step's capability up in the registry and builds it with
 // its configuration. Constructing here, at compile time, is what lets a node
 // validate its config once and lets its descriptor depend on that config.
 func (c *compiler) resolve() {
 	c.nodes = make([]node.RuntimeNode, len(c.ids))
 	for i, id := range c.ids {
+		if c.isInput(i) {
+			continue // an input supplies a value; there is nothing to build
+		}
 		step := c.file.Steps[id]
 
 		def, err := c.reg.Resolve(step.Uses)
@@ -186,6 +233,9 @@ func (c *compiler) checkEdges() {
 	c.deps = make([][]int, len(c.ids))
 
 	for i, id := range c.ids {
+		if c.isInput(i) {
+			continue // an input consumes nothing, so it has no edges to check
+		}
 		step := c.file.Steps[id]
 		// A step whose node did not resolve has no ports to check against, and
 		// one that names a missing step has nothing to check on the other end.
@@ -202,14 +252,22 @@ func (c *compiler) checkEdges() {
 		c.deps[i] = deps
 
 		for port, dep := range deps {
-			if c.nodes[dep] == nil {
-				continue
-			}
 			want := desc.Inputs[port].Type
-			got := c.nodes[dep].Descriptor().Output.Type
+			got := c.outputType(dep)
+			if got == "" {
+				continue // already reported: nothing to compare against
+			}
 			if want != got {
-				c.fail(id, "input %q expects %s but step %q produces %s",
-					desc.Inputs[port].Name, want, c.ids[dep], got)
+				// Naming the producer for what it is: "step" for a computed
+				// value, "pipeline input" for a supplied one, so the reader
+				// knows where to go and looks in the right half of the file.
+				if c.isInput(dep) {
+					c.fail(id, "input %q expects %s but pipeline input %q supplies %s",
+						desc.Inputs[port].Name, want, c.ids[dep], got)
+				} else {
+					c.fail(id, "input %q expects %s but step %q produces %s",
+						desc.Inputs[port].Name, want, c.ids[dep], got)
+				}
 			}
 		}
 	}
@@ -294,6 +352,15 @@ func (c *compiler) plan(name string) *ExecutionPlan {
 	p := &ExecutionPlan{Name: name, Steps: make([]CompiledStep, len(c.ids))}
 
 	for i, id := range c.ids {
+		if c.isInput(i) {
+			// An input is a step with no node and no dependencies. It is not a
+			// root: the executor records its supplied value before scheduling
+			// anything, so it is never waiting to run.
+			p.Steps[i] = CompiledStep{ID: id, InputOffset: p.TotalInputs, Retry: DefaultRetry}
+			p.Inputs = append(p.Inputs, PlanInput{Name: id, Type: c.inputTypes[i], Step: i})
+			continue
+		}
+
 		step := c.file.Steps[id]
 		deps := c.deps[i]
 		p.Steps[i] = CompiledStep{

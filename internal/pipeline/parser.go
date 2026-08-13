@@ -82,6 +82,16 @@ func (f *File) validate() error {
 		return fmt.Errorf("pipeline has no steps")
 	}
 
+	for _, name := range f.InputNames() {
+		if f.Inputs[name] == "" {
+			return fmt.Errorf("input %q: missing type", name)
+		}
+		// One namespace, because needs cannot say which it meant.
+		if _, clash := f.Steps[name]; clash {
+			return fmt.Errorf("input %q collides with the step of the same name", name)
+		}
+	}
+
 	for _, id := range f.StepIDs() {
 		step := f.Steps[id]
 		if step.Uses == "" {
@@ -105,6 +115,17 @@ func (f *File) validate() error {
 		}
 	}
 	return nil
+}
+
+// InputNames returns declared input names in sorted order, for the same reason
+// StepIDs sorts.
+func (f *File) InputNames() []string {
+	names := make([]string, 0, len(f.Inputs))
+	for name := range f.Inputs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // StepIDs returns step IDs in sorted order. YAML mappings have no order once

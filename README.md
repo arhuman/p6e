@@ -53,6 +53,15 @@ ok: 5 steps
 conditions that run concurrently against the same decoded value; the engine
 shares a reference, it never copies.
 
+A pipeline can take arguments, so one compiled plan serves many runs rather than
+being a constant. Inputs are declared with a type and checked like any other
+edge, and `p6e check` still needs no values, which is what lets a pipeline whose
+inputs are secrets validate anywhere:
+
+```
+$ ./bin/p6e run examples/parameterized.yaml --input owner=golang --input repo=go
+```
+
 `p6e nodes` lists the registered capabilities a pipeline file can reference:
 
 ```
@@ -280,6 +289,8 @@ on.
   when a node's input ports are not pairwise type-distinct.
 - `docs/adr/0010-data-dependent-values.md`: how a pipeline builds strings and
   requests from data without an expression language.
+- `docs/adr/0011-parameterized-execution.md`: why an input is a graph node, and
+  what it costs the compile-time guarantee.
 - `docs/adr/0003-v0-baseline-performance.md`: the measurements behind the
   Performance section above.
 

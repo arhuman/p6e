@@ -13,6 +13,7 @@ with V0.
 ## Contents
 
 - [Document structure](#document-structure)
+- [Inputs](#inputs)
 - [Steps](#steps)
 - [`uses`](#uses)
 - [`needs`](#needs)
@@ -30,6 +31,9 @@ with V0.
 ```yaml
 version: 1
 
+inputs:                          # optional
+  <name>: <type>
+
 steps:
   <step-id>:
     uses: <capability>
@@ -40,11 +44,10 @@ steps:
       backoff: <duration>
 ```
 
-`version` and `steps` are the only top-level keys.
-
 | Key | Required | Value |
 |---|---|---|
 | `version` | yes | Must be `1`. It is the only schema version this build understands. |
+| `inputs` | no | A mapping of input name to type name. See [Inputs](#inputs). |
 | `steps` | yes | A mapping of step ID to step. Must contain at least one entry. |
 
 Two document-level rules:
@@ -55,6 +58,90 @@ Two document-level rules:
 - **A document is capped at 1 MiB** (`MaxPipelineBytes`). Input over the limit
   is an error rather than a truncation, because a silently truncated pipeline
   would compile into a different, smaller graph.
+
+## Inputs
+
+Optional. Declares values the run supplies, so one pipeline serves many runs
+instead of being a constant.
+
+```yaml
+version: 1
+
+inputs:
+  owner: Text
+  repo: Text
+
+steps:
+  url:
+    uses: text.format
+    with:
+      template: "https://api.github.com/repos/{{owner}}/{{repo}}"
+    needs:
+      owner: owner
+      repo: repo
+```
+
+```bash
+p6e run pipeline.yaml --input owner=golang --input repo=go
+p6e run pipeline.yaml --input payload=@body.json
+```
+
+**An input is a graph node like any other.** A step binds it with `needs` exactly
+as it binds a step, and the compiler type checks that edge the same way. The
+only difference is where the value comes from.
+
+Because `needs` cannot say which it meant, **inputs and steps share one
+namespace**: a name used by both is a parse error.
+
+### What is checked, and when
+
+| Checked | When |
+|---|---|
+| The declared type exists | compile time |
+| Every step consuming an input expects the declared type | compile time |
+| An input's name does not collide with a step | parse time |
+| A supplied value carries the declared type | run time |
+| Every declared input was supplied | run time |
+
+The last two are the only checks in the engine that cannot happen before a run,
+and they are unavoidable: the compiler cannot know a value it was never given.
+Both are bounded, because they happen before any node executes.
+
+**`p6e check` needs no values.** That is the point: a pipeline whose inputs are
+secrets still validates on a machine that does not hold them.
+
+### Supplying values
+
+`--input NAME=VALUE`, repeated once per input. `--input NAME=@FILE` reads the
+value from a file. The declared type decides how the text is read:
+
+| Declared type | Read as |
+|---|---|
+| `Text` | the text itself |
+| `Bytes` | its bytes |
+| `Int` | a whole number |
+| `Bool` | `true` or `false` |
+
+Those four are what the command line can build. The engine accepts an input of
+any registered type, which an embedded caller can supply directly through
+`Options.Inputs`. A pipeline wanting a document from the command line declares
+`Bytes` and adds a `json.decode` step, which is the same explicit conversion
+every other edge makes.
+
+An assignment naming an input the pipeline did not declare is an error, not
+something ignored: a misspelled name would otherwise look like it worked while
+the real input went unsupplied.
+
+### Inputs and `env.get`
+
+Both bring a value in from outside, and they differ in who supplies it. An input
+is for what varies **per run**, and the caller provides it. [`env.get`](#envget)
+is for what varies **per environment**, and the machine provides it.
+
+### Limits
+
+Every declared input is required; there is no default. All of them are supplied
+per run, so a plan cannot carry one from a previous execution.
 
 ## Steps
 
@@ -88,8 +175,8 @@ configuration: the `value` node's output type is whatever its `with.type` says.
 
 ## `needs`
 
-Optional. Declares which steps feed this step's input ports. A step with no
-`needs` is a root and starts immediately.
+Optional. Declares which steps, or [inputs](#inputs), feed this step's input
+ports. A step with no `needs` is a root and starts immediately.
 
 Two forms are accepted.
 
@@ -1069,6 +1156,18 @@ time and recompiling between each is a miserable way to write a pipeline.
 | Unknown port | `step "j": needs binds "in2", but node "join" has no such input (inputs: "in0", "in1")` |
 | Ambiguous positional binding | `step "p": node "pair" has inputs of identical type Alpha ("in0", "in1"), so a positional swap would type check: bind needs by name instead` |
 | Retry out of range | `step "f": retry.max_attempts must be at most 100, got 500` |
+| Input with no type | `input "p": missing type` |
+| Input name taken by a step | `input "d" collides with the step of the same name` |
+| Unregistered input type | `input "p" declares type "Byte", which is not a registered type` |
+| Type mismatch from an input | `step "d": input "in" expects Bytes but pipeline input "p" supplies Text` |
+
+Two more are reported by a run rather than by `p6e check`, because they concern
+values the compiler never sees. Both happen before any node executes:
+
+| Problem | Example message |
+|---|---|
+| Input not supplied | `input "payload" was not supplied` |
+| Supplied value of the wrong type | `input "seed" is declared Box but the value supplied is Label` |
 
 Two things about that table are worth knowing before you try to reproduce a row.
 
@@ -1103,6 +1202,7 @@ Options for `run`:
 
 | Option | Effect |
 |---|---|
+| `--input NAME=VALUE` | Supply a declared [input](#inputs). `NAME=@FILE` reads it from a file. Repeat once per input. |
 | `--detect-mutation` | Report nodes that mutate a value they do not own. Expensive: for debugging, not production. |
 | `--inline` | Run a solitary ready step on the main goroutine. Much faster on sequential pipelines, but a node that ignores cancellation will wedge the run instead of being abandoned. |
 
@@ -1160,7 +1260,9 @@ compiles, because a missing path is a verdict rather than an error. Change
 `json.decode` takes `Bytes` and `fetch` produces `HTTPResponse`.
 
 The other bundled examples are `examples/monitor.yaml` (a cron-ready health
-check that fails the run when a service is unhealthy), `examples/chaining.yaml`
+check that fails the run when a service is unhealthy),
+`examples/parameterized.yaml` (a pipeline that takes arguments),
+`examples/chaining.yaml`
 (using one call's result to build the next, with a computed URL and a token from
 the environment), `examples/json.yaml` (fan-out to three conditions sharing one
 decoded document), `examples/exec.yaml` (running a local process), and

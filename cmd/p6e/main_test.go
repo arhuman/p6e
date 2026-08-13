@@ -32,7 +32,10 @@ func writePipeline(t *testing.T, body string) string {
 // The shipped examples are documentation, and documentation that does not
 // compile is worse than none.
 func TestExamplesCompile(t *testing.T) {
-	for _, name := range []string{"json.yaml", "exec.yaml", "http.yaml"} {
+	for _, name := range []string{
+		"json.yaml", "exec.yaml", "http.yaml",
+		"chaining.yaml", "monitor.yaml", "parameterized.yaml",
+	} {
 		code, stdout, stderr := invoke(t, "check", filepath.Join("..", "..", "examples", name))
 		if code != exitOK {
 			t.Errorf("check %s: exit %d, stderr: %s", name, code, stderr)

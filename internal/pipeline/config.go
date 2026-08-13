@@ -17,8 +17,12 @@ const MaxRetryAttempts = 100
 // File is a parsed pipeline document, before any resolution or type checking.
 // It mirrors the YAML one-to-one and knows nothing about nodes.
 type File struct {
-	Version int             `yaml:"version"`
-	Steps   map[string]Step `yaml:"steps"`
+	Version int `yaml:"version"`
+	// Inputs are the values the run supplies, as a mapping of name to type
+	// name. An input is referenced by a step's needs exactly as a step is, so
+	// the two share one namespace and a collision is a compile error.
+	Inputs  map[string]string `yaml:"inputs"`
+	Steps   map[string]Step   `yaml:"steps"`
 }
 
 // Step is one entry under steps. The map key is the step's ID.

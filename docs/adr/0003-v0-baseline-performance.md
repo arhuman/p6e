@@ -123,6 +123,12 @@ than quoted from memory, so the two columns share a machine and a session.
 Allocations per run rose by exactly one everywhere (the executor's ready queue).
 Compilation rose by 100, from 313 to 413, and by 5.9 KB.
 
+Parameterized execution (ADR 0011) later added one more compile allocation, 413
+to 414, and 1.8 KB: inputs and steps share an index space, so the compiler builds
+one combined slice of names rather than using the step list directly. Wall time
+did not move, and nothing changed at run time, since an input is recorded rather
+than scheduled.
+
 **The last row is the control.** `BenchmarkGoroutineHandoff` measures code that
 has not changed, and it moved 4%. That is the machine drift and noise floor for
 this session, so the fan-out figure is unchanged and everything at 9% or above is

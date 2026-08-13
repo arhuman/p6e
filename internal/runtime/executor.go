@@ -31,6 +31,14 @@ const DefaultAbandonAfter = 5 * time.Second
 type Options struct {
 	// WorkflowID identifies the pipeline. Defaults to the plan's name.
 	WorkflowID string
+	// Inputs supplies the values the pipeline declared, by name. Every declared
+	// input must be present and carry the type it declared; a missing or
+	// ill-typed one fails that input's step, which stops the run before any
+	// node executes.
+	//
+	// This is what makes one plan reusable across runs: the plan is a function
+	// of these, not a constant.
+	Inputs map[string]node.Value
 	// ExecutionID identifies this run. Defaults to a generated value.
 	ExecutionID string
 	// MaxConcurrency caps how many steps execute at once. Zero selects
@@ -214,6 +222,14 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 		}
 	}
 
+	// An input carries a value rather than a computation, so it is recorded
+	// before anything is scheduled and never enters the ready queue. Routing it
+	// through handle is what makes a missing input behave like any other failed
+	// step: the run stops and everything downstream is reported as skipped.
+	for _, in := range plan.Inputs {
+		handle(completion{index: in.Step, result: supply(opts.Inputs, in)})
+	}
+
 	ready = append(ready, plan.Roots...)
 	abandoned := false
 
@@ -280,6 +296,24 @@ func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execu
 
 	ex.Mutations = guard.check(ex)
 	return ex
+}
+
+// supply resolves one declared input against what the run provided.
+//
+// The type check is the run-time counterpart of the compiler's edge check: the
+// compiler proved every consumer expects the declared type, so checking the
+// supplied value here is what makes that proof hold for values it never saw.
+func supply(supplied map[string]node.Value, in pipeline.PlanInput) node.ResultValue {
+	value, ok := supplied[in.Name]
+	if !ok {
+		return node.ResultValue{Err: node.Errf(node.KindInvalidInput, "input_missing",
+			"input %q was not supplied", in.Name)}
+	}
+	if got := value.Type(); got != in.Type {
+		return node.ResultValue{Err: node.Errf(node.KindInvalidInput, "input_type",
+			"input %q is declared %s but the value supplied is %s", in.Name, in.Type, got)}
+	}
+	return node.ResultValue{Value: value}
 }
 
 // record stores a completion and reports whether it was a failure.

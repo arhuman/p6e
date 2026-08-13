@@ -1,0 +1,73 @@
+# A pipeline that takes arguments.
+#
+# Without inputs a pipeline is a constant: the same logic against two repos or
+# two customers means two files. Declaring inputs makes it a function, so one
+# compiled plan serves every run.
+#
+#   p6e check examples/parameterized.yaml
+#   p6e run examples/parameterized.yaml --input owner=golang --input repo=go
+#
+# Values can come from a file too, which is how a payload gets in:
+#
+#   p6e run examples/parameterized.yaml --input owner=@owner.txt --input repo=go
+#
+# Inputs are checked like everything else. They are declared with a type, that
+# type is verified to exist when the pipeline compiles, and every step consuming
+# one is type checked against it. What the compiler cannot know is the value, so
+# that alone is checked when the run supplies it.
+#
+# Note that p6e check needs no values at all. A pipeline whose inputs are
+# secrets still validates on a machine that does not hold them.
+#
+# This example reaches the network, so p6e check validates it offline but
+# p6e run needs connectivity.
+
+version: 1
+
+inputs:
+  owner: Text
+  repo: Text
+
+steps:
+  url:
+    uses: text.format
+    with:
+      template: "https://api.github.com/repos/{{owner}}/{{repo}}"
+    needs:
+      owner: owner
+      repo: repo
+
+  request:
+    uses: http.from_url
+    needs: [url]
+
+  fetch:
+    uses: http.request
+    needs: [request]
+    with:
+      timeout: 10s
+    retry:
+      max_attempts: 3
+      backoff: 200ms
+
+  ok:
+    uses: http.assert_status
+    needs: [fetch]
+    with:
+      min: 200
+      max: 299
+
+  body:
+    uses: http.body
+    needs: [ok]
+
+  document:
+    uses: json.decode
+    needs: [body]
+
+  stars:
+    uses: json.get
+    needs: [document]
+    with:
+      path: stargazers_count
+      as: Int
