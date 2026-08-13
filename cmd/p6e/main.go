@@ -89,7 +89,7 @@ func main() {
 	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer) int { //nolint:gocyclo,funlen // One switch over the verbs: splitting it spreads the CLI surface without removing a branch.
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
@@ -196,7 +196,7 @@ func splitRunArgs(args []string) (files []string, opts runtime.Options, inputs [
 // A missing input is deliberately not reported here. The run reports it as a
 // failed input step, alongside every other input, which says more than stopping
 // at the first one.
-func buildInputs(plan *pipeline.ExecutionPlan, assignments []string) (map[string]node.Value, error) {
+func buildInputs(plan *pipeline.ExecutionPlan, assignments []string) (map[string]node.Value, error) { //nolint:gocognit // Each branch is a distinct diagnostic a user reads, not nested logic.
 	declared := make(map[string]node.TypeID, len(plan.Inputs))
 	names := make([]string, 0, len(plan.Inputs))
 	for _, in := range plan.Inputs {

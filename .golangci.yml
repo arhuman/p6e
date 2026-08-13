@@ -1,7 +1,32 @@
 version: "2"
 
 linters:
+  # Complexity, length and duplication are enforced rather than left to
+  # discipline, for the same reason COVER_MIN is a gate rather than a habit: an
+  # unenforced convention is one nobody notices drifting. Everything currently
+  # over a threshold carries a //nolint with a reason, so each is a decision on
+  # record instead of an accident. Treat these as a ratchet: lower them as the
+  # outliers are paid off, never raise one to green a build.
+  enable:
+    - gocyclo
+    - gocognit
+    - funlen
+    - nestif
+    - dupl
+
   settings:
+    gocyclo:
+      min-complexity: 11 # flags cyclomatic complexity > 10
+    gocognit:
+      min-complexity: 16 # flags cognitive complexity > 15
+    funlen:
+      lines: 80
+      statements: 40
+    nestif:
+      min-complexity: 4 # proxy for nesting depth <= 4
+    dupl:
+      threshold: 50
+
     errcheck:
       # Writing to an already-open writer is the one error Go code
       # conventionally ignores: the CLI cannot report a failure to report, and
@@ -21,3 +46,11 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+      # A table-driven test is long and repetitive by design, and splitting one
+      # to satisfy a length budget makes it harder to read, not easier.
+      - path: _test\.go
+        linters:
+          - funlen
+          - dupl
+          - gocyclo
+          - gocognit

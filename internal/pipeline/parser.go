@@ -71,7 +71,7 @@ func ParseFile(path string) (*File, error) {
 }
 
 // validate covers what can be judged from the document alone.
-func (f *File) validate() error {
+func (f *File) validate() error { //nolint:gocognit,gocyclo // A schema check is a list of independent rules, each one a message an author reads.
 	if f.Version == 0 {
 		return fmt.Errorf("missing version (expected %d)", Version)
 	}

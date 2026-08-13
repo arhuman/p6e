@@ -115,7 +115,11 @@ var executionCounter atomic.Uint64
 // Steps still running when Run gives up are reported as cancelled and counted
 // in Execution.Abandoned. Their goroutines are left behind: that is the cost of
 // not being able to kill them, and it is preferable to wedging the caller.
-func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execution {
+// nolint below is a known outlier, not a blanket exemption: the coordinator's
+// state and its select are one mechanism, and the comments through the body are
+// what make it readable. Extracting a scheduler type is the standing
+// recommendation; do it as its own change, not as a side effect of another.
+func Run(ctx context.Context, plan *pipeline.ExecutionPlan, opts Options) *Execution { //nolint:gocognit,funlen,gocyclo
 	ex := &Execution{
 		ID:         defaultString(opts.ExecutionID, generateExecutionID),
 		Plan:       plan,

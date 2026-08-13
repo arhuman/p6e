@@ -166,7 +166,7 @@ func OverlapDefault(t trigger.Trigger) OverlapPolicy {
 // has already proven each step consumes its inputs at the declared types, so
 // showing the trigger produces those same types is what extends the proof all
 // the way out to the event. Nothing is left for the first request to discover.
-func (c *compiler) resolveTrigger() {
+func (c *compiler) resolveTrigger() { //nolint:gocyclo // A sequence of independent checks, each with its own diagnostic.
 	spec := c.file.Trigger
 	if spec == nil {
 		return
@@ -388,7 +388,7 @@ func (c *compiler) reportCycle(path []int, back int) {
 
 // checkEdges resolves each step's needs to dependency indices in port order,
 // then type checks every edge. This is the reason the engine compiles at all.
-func (c *compiler) checkEdges() {
+func (c *compiler) checkEdges() { //nolint:gocognit // The branches here are the type rules themselves, and this is the compiler's core loop.
 	c.deps = make([][]int, len(c.ids))
 
 	for i, id := range c.ids {

@@ -34,7 +34,7 @@ func Definition() node.Definition {
 	return node.Definition{Name: "value", New: newNode}
 }
 
-func newNode(cfg node.Config) (node.RuntimeNode, error) {
+func newNode(cfg node.Config) (node.RuntimeNode, error) { //nolint:gocyclo // One branch per supported constant type: a table, not logic.
 	var c config
 	if err := cfg.Decode(&c); err != nil {
 		return nil, err

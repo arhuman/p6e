@@ -17,7 +17,7 @@ import (
 
 // splitServeArgs parses serve's options, hand rolled for the same reason
 // splitRunArgs is: the verb comes first, which flag.FlagSet does not model.
-func splitServeArgs(args []string) (dirs []string, opts daemon.Options, unknown string, err error) {
+func splitServeArgs(args []string) (dirs []string, opts daemon.Options, unknown string, err error) { //nolint:gocognit,funlen,gocyclo,dupl // A hand-rolled parser is flat by nature; the doc comment says why flag.FlagSet does not fit.
 	take := func(i *int, arg string) (string, bool) {
 		if _, value, found := strings.Cut(arg, "="); found {
 			return value, true
@@ -48,7 +48,11 @@ func splitServeArgs(args []string) (dirs []string, opts daemon.Options, unknown 
 			}
 			opts.AdminAddr = value
 
-		case name == "--max-concurrency":
+		// The next two cases parse into different types with different
+		// validation and different messages. Factoring the shape they share
+		// would leave a helper taking a parse function and an error string,
+		// which is longer than the duplication it removes.
+		case name == "--max-concurrency": //nolint:dupl
 			value, ok := take(&i, arg)
 			if !ok {
 				return nil, opts, arg, nil
@@ -59,7 +63,7 @@ func splitServeArgs(args []string) (dirs []string, opts daemon.Options, unknown 
 			}
 			opts.MaxConcurrency = n
 
-		case name == "--drain":
+		case name == "--drain": //nolint:dupl
 			value, ok := take(&i, arg)
 			if !ok {
 				return nil, opts, arg, nil

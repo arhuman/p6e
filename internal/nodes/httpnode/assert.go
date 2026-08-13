@@ -77,7 +77,7 @@ func AssertStatusDefinition() node.Definition {
 }
 
 // bounds resolves the configuration into the closed interval to accept.
-func (c assertStatusConfig) bounds() (int, int, error) {
+func (c assertStatusConfig) bounds() (int, int, error) { //nolint:gocyclo // Enumerating the invalid combinations of equals/min/max is what this function is for.
 	hasRange := c.Min != nil || c.Max != nil
 
 	switch {
