@@ -93,7 +93,7 @@ func statusFor(err *node.NodeError) int {
 		return http.StatusOK
 	case err.Code == trigger.CodeUnauthorized:
 		return http.StatusUnauthorized
-	case err.Code == codeOverlapped:
+	case err.Code == codeOverlapped, err.Code == codeAtCapacity:
 		return http.StatusTooManyRequests
 	case err.Code == codeQuarantined, err.Code == codeDraining:
 		return http.StatusServiceUnavailable

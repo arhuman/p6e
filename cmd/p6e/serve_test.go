@@ -128,6 +128,11 @@ func TestServeRejectsBadOptions(t *testing.T) {
 		"non-numeric limit":    {"serve", dir, "--max-concurrency", "lots"},
 		"zero limit":           {"serve", dir, "--max-concurrency", "0"},
 		"unparseable drain":    {"serve", dir, "--drain", "soon"},
+		"non-numeric max-runs": {"serve", dir, "--max-runs", "many"},
+		// Zero is rejected rather than taken as "no cap": that is what a
+		// negative value means, and silently defaulting a zero would be the
+		// kind of quiet reinterpretation this CLI avoids everywhere else.
+		"zero max-runs":        {"serve", dir, "--max-runs", "0"},
 		"two directories":      {"serve", dir, dir},
 		"no directory":         {"serve"},
 		"option without value": {"serve", dir, "--listen"},

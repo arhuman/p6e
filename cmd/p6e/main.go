@@ -64,6 +64,9 @@ Options for serve:
                               loopback; "-" serves none of it.
   --max-concurrency N         steps in flight across every pipeline at once,
                               not pipelines (default 256)
+  --max-runs N                concurrent runs of one pipeline, over which the
+                              daemon answers 429 rather than queueing
+                              (default 64). A negative value removes the cap.
   --drain DURATION            how long to wait for runs in progress on shutdown
                               (default 30s)
 `

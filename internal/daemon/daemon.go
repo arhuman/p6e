@@ -36,6 +36,13 @@ const (
 	DefaultMaxConcurrency = 256
 	DefaultDrainTimeout   = 30 * time.Second
 	DefaultReadTimeout    = 30 * time.Second
+	DefaultIdleTimeout    = 120 * time.Second
+	// DefaultMaxRunsPerPipeline bounds concurrent runs of one pipeline under
+	// the allow overlap policy, which is the default for a webhook. Steps are
+	// bounded process-wide by the slot budget; runs were not bounded by
+	// anything, so a burst grew goroutines and retained plan state instead of
+	// shedding load.
+	DefaultMaxRunsPerPipeline = 64
 )
 
 // AdminDisabled is the AdminAddr that serves no admin endpoints.
@@ -62,6 +69,33 @@ type Options struct {
 	// default. Lowering it makes a wedged node surface sooner, at the cost of
 	// giving a merely slow one less room.
 	AbandonAfter time.Duration
+	// MaxRunsPerPipeline caps concurrent runs of a single pipeline under the
+	// allow overlap policy. Zero selects DefaultMaxRunsPerPipeline; a negative
+	// value removes the cap, which is the pre-cap behaviour and is only sane
+	// behind something that already limits the rate.
+	//
+	// Over the cap the daemon answers 429 rather than queueing, because a queue
+	// with no bound is the same problem one indirection further away.
+	MaxRunsPerPipeline int
+	// ReadTimeout bounds reading a whole request, headers and body. Zero
+	// selects DefaultReadTimeout.
+	//
+	// It is what stops a caller sending headers promptly and then dribbling the
+	// body forever: max_body bounds bytes, not time, so without this a slow
+	// sender holds a connection and a handler goroutine for as long as it likes.
+	ReadTimeout time.Duration
+	// IdleTimeout bounds how long a keep-alive connection may sit unused. Zero
+	// selects DefaultIdleTimeout.
+	IdleTimeout time.Duration
+	// WriteTimeout bounds the response write, measured from the end of the
+	// request headers, which means it also bounds the handler. Zero leaves it
+	// unset on the webhook listener, deliberately: that handler runs the
+	// pipeline synchronously, and a run is already bounded by the trigger's own
+	// required timeout. Setting this below that timeout cuts off responses the
+	// pipeline was about to produce.
+	//
+	// The admin listener always sets it, since those handlers are trivial.
+	WriteTimeout time.Duration
 	// Logger receives one record per run. Zero selects slog's default.
 	Logger *slog.Logger
 }
@@ -75,6 +109,12 @@ type Daemon struct {
 	adminAddr string
 	drain     time.Duration
 	abandon   time.Duration
+
+	// maxRuns caps concurrent runs of one pipeline. Zero means no cap.
+	maxRuns      int64
+	readTimeout  time.Duration
+	idleTimeout  time.Duration
+	writeTimeout time.Duration
 
 	server *http.Server
 	admin  *http.Server
@@ -114,6 +154,21 @@ func New(served []*Pipeline, opts Options) *Daemon {
 		d.drain = DefaultDrainTimeout
 	}
 
+	d.readTimeout = orDefault(opts.ReadTimeout, DefaultReadTimeout)
+	d.idleTimeout = orDefault(opts.IdleTimeout, DefaultIdleTimeout)
+	// Not defaulted: zero means "leave unset on the webhook listener", which is
+	// a meaningful choice rather than an omission. See Options.WriteTimeout.
+	d.writeTimeout = opts.WriteTimeout
+
+	switch {
+	case opts.MaxRunsPerPipeline < 0:
+		d.maxRuns = 0 // explicitly uncapped
+	case opts.MaxRunsPerPipeline == 0:
+		d.maxRuns = DefaultMaxRunsPerPipeline
+	default:
+		d.maxRuns = int64(opts.MaxRunsPerPipeline)
+	}
+
 	concurrency := opts.MaxConcurrency
 	if concurrency <= 0 {
 		concurrency = DefaultMaxConcurrency
@@ -124,6 +179,13 @@ func New(served []*Pipeline, opts Options) *Daemon {
 		if _, ok := p.Trigger().(trigger.HTTPDriven); ok {
 			d.routes[p.Trigger().Claim().Key] = p
 		}
+	}
+	return d
+}
+
+func orDefault(d, fallback time.Duration) time.Duration {
+	if d <= 0 {
+		return fallback
 	}
 	return d
 }
@@ -171,7 +233,13 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		d.admin = &http.Server{
 			Addr:              d.adminAddr,
 			Handler:           d.adminHandler(),
-			ReadHeaderTimeout: DefaultReadTimeout,
+			ReadHeaderTimeout: d.readTimeout,
+			ReadTimeout:       d.readTimeout,
+			IdleTimeout:       d.idleTimeout,
+			// These handlers do a little arithmetic over in-memory counters, so
+			// a write that has not finished within the read budget is a stuck
+			// peer rather than slow work.
+			WriteTimeout: orDefault(d.writeTimeout, d.readTimeout),
 		}
 		go func() { serverErr <- listenAndServe(d.admin, "admin listener") }()
 		d.log.Info("serving admin endpoints",
@@ -183,7 +251,15 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		d.server = &http.Server{
 			Addr:              d.addr,
 			Handler:           d.handler(),
-			ReadHeaderTimeout: DefaultReadTimeout,
+			ReadHeaderTimeout: d.readTimeout,
+			ReadTimeout:       d.readTimeout,
+			IdleTimeout:       d.idleTimeout,
+			// Deliberately whatever the caller asked for, usually unset: this
+			// handler runs the pipeline synchronously and WriteTimeout is
+			// measured from the end of the request headers, so any value below
+			// the trigger's timeout truncates responses the run was about to
+			// produce. The run is already bounded by that timeout.
+			WriteTimeout: d.writeTimeout,
 		}
 		go func() { serverErr <- listenAndServe(d.server, "webhook listener") }()
 		d.log.Info("serving webhooks", slog.String("addr", d.addr), slog.Int("routes", len(d.routes)))

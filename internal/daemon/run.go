@@ -19,6 +19,7 @@ const (
 	codeOverlapped  = "overlapped"
 	codeQuarantined = "quarantined"
 	codeDraining    = "draining"
+	codeAtCapacity  = "at_capacity"
 )
 
 // QuarantineAfter is how many consecutive runs may abandon a step before the
@@ -64,29 +65,9 @@ func (p *Pipeline) Runs() int64 { return p.runs.Load() }
 // is ordinary and is exactly what the overlap policy is for.
 func (d *Daemon) fire(p *Pipeline) trigger.Fire {
 	return func(ctx context.Context, values map[string]node.Value) trigger.Outcome {
-		if p.quarantined.Load() {
-			return refuse(codeQuarantined, node.KindPermanent,
-				"pipeline %q is quarantined after %d consecutive runs left a step running",
-				p.Name, QuarantineAfter)
+		if refusal := d.admit(p); refusal != nil {
+			return trigger.Outcome{Err: refusal}
 		}
-
-		// Registering the run under the read lock is what makes the drain
-		// reliable: once Drain holds the write lock no new run can slip past
-		// the check and be missed by the wait.
-		d.mu.RLock()
-		if d.draining {
-			d.mu.RUnlock()
-			return refuse(codeDraining, node.KindTransient, "the daemon is shutting down")
-		}
-		if !p.claimSlot() {
-			d.mu.RUnlock()
-			return refuse(codeOverlapped, node.KindTransient,
-				"a run of %q is already in progress and its policy is %s",
-				p.Name, pipeline.OverlapDrop)
-		}
-		d.wg.Add(1)
-		d.inflight.Add(1)
-		d.mu.RUnlock()
 
 		defer func() {
 			p.inflight.Add(-1)
@@ -117,15 +98,66 @@ func (d *Daemon) fire(p *Pipeline) trigger.Fire {
 	}
 }
 
-// claimSlot admits a run under the pipeline's overlap policy. The
-// compare-and-swap is what makes drop actually exclusive: checking a counter
-// and then incrementing it would let two simultaneous events both find it zero.
-func (p *Pipeline) claimSlot() bool {
+// admit decides whether one event may start a run, and registers it when it
+// may. It returns the refusal, or nil to proceed.
+//
+// Every reason a run can be refused lives here rather than being scattered
+// through fire, because they share one ordering requirement: the registration
+// that makes the drain reliable has to happen under the same read lock as the
+// draining check, and a refusal after that point would leak the registration.
+//
+// The caller owns the matching release, which is why this does not take it.
+func (d *Daemon) admit(p *Pipeline) *node.NodeError {
+	if p.quarantined.Load() {
+		return node.Errf(node.KindPermanent, codeQuarantined,
+			"pipeline %q is quarantined after %d consecutive runs left a step running",
+			p.Name, QuarantineAfter)
+	}
+
+	// Registering the run under the read lock is what makes the drain
+	// reliable: once drainRuns holds the write lock no new run can slip past
+	// the check and be missed by the wait.
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	if d.draining {
+		return node.Errf(node.KindTransient, codeDraining, "the daemon is shutting down")
+	}
+	if !p.claimSlot(d.maxRuns) {
+		if p.Plan.Trigger.Overlap == pipeline.OverlapDrop {
+			return node.Errf(node.KindTransient, codeOverlapped,
+				"a run of %q is already in progress and its policy is %s",
+				p.Name, pipeline.OverlapDrop)
+		}
+		return node.Errf(node.KindTransient, codeAtCapacity,
+			"pipeline %q already has %d runs in progress, which is its ceiling",
+			p.Name, d.maxRuns)
+	}
+
+	d.wg.Add(1)
+	d.inflight.Add(1)
+	return nil
+}
+
+// claimSlot admits a run under the pipeline's overlap policy, up to ceiling
+// concurrent runs. A ceiling of zero is uncapped.
+//
+// Both branches compare and swap rather than checking a counter and then
+// incrementing it, which would let two simultaneous events both find room that
+// only one of them can have.
+func (p *Pipeline) claimSlot(ceiling int64) bool {
 	if p.Plan.Trigger.Overlap == pipeline.OverlapDrop {
 		return p.inflight.CompareAndSwap(0, 1)
 	}
-	p.inflight.Add(1)
-	return true
+	for {
+		running := p.inflight.Load()
+		if ceiling > 0 && running >= ceiling {
+			return false
+		}
+		if p.inflight.CompareAndSwap(running, running+1) {
+			return true
+		}
+	}
 }
 
 // outcomeOf reduces an execution to what a trigger needs: whether it worked,
@@ -171,8 +203,4 @@ func (d *Daemon) record(p *Pipeline, ex *runtime.Execution, took time.Duration) 
 		return
 	}
 	d.log.Info("run finished", attrs...)
-}
-
-func refuse(code string, kind node.ErrorKind, format string, args ...any) trigger.Outcome {
-	return trigger.Outcome{Err: node.Errf(kind, code, format, args...)}
 }

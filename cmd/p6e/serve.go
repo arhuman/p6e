@@ -74,6 +74,20 @@ func splitServeArgs(args []string) (dirs []string, opts daemon.Options, unknown 
 			}
 			opts.DrainTimeout = d
 
+		// Accepts a negative value, unlike --max-concurrency, because removing
+		// the cap is a real choice behind something that already limits rate.
+		case name == "--max-runs": //nolint:dupl
+			value, ok := take(&i, arg)
+			if !ok {
+				return nil, opts, arg, nil
+			}
+			n, convErr := strconv.Atoi(value)
+			if convErr != nil || n == 0 {
+				return nil, opts, "", fmt.Errorf(
+					"--max-runs wants a positive number, or a negative one to remove the cap, got %q", value)
+			}
+			opts.MaxRunsPerPipeline = n
+
 		case strings.HasPrefix(arg, "-"):
 			return nil, opts, arg, nil
 
