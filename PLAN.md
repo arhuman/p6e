@@ -1,5 +1,20 @@
 # p6e: Typed Low-Latency Pipeline Runtime in Go (V0 development plan)
 
+## Status
+
+V0 is delivered. Every ordered step below is done and the Definition of Done is
+met. Two things have shipped since, each with its own ADR, and neither is
+described by this plan:
+
+- **Parameterized execution** (ADR 0011): `inputs:` declares values the run
+  supplies, so one compiled plan serves many runs instead of being a constant.
+- **Triggered pipelines and daemon mode** (ADR 0012): `p6e serve` runs a
+  directory of pipelines, each when its trigger fires.
+
+**This file is the record of how V0 was built, not a description of what the
+engine does now.** For that, read `README.md` and `docs/pipeline.md`, which are
+maintained. The ordered steps below are not, and are left as written.
+
 ## Context
 
 Build a small, fast pipeline execution engine in Go from the handoff spec: workflows are versionable YAML files, compiled ahead of execution into a typed DAG plan, then run with minimal overhead (no JSON serialization between native Go nodes, no reflection on the hot path). The engine is a "compiler + runtime for pipelines", not an n8n clone. V0 scope is defined by the handoff's Definition of Done (section 26).
@@ -19,12 +34,24 @@ enforces that until we deliberately decide a package is a public contract.
 cmd/p6e/                     CLI (the only non-internal code)
 internal/pipeline/           config.go, parser.go, compiler.go, plan.go
 internal/node/               node.go, descriptor.go, registry.go, types.go, error.go, result.go, value.go
-internal/runtime/            executor.go, scheduler.go, state.go
-internal/nodes/              value/, exec/, http/, json/, condition/
+internal/runtime/            executor.go, state.go, mutation.go
+internal/nodes/              value/, env/, text/, jsonnode/, jsonpath/, condition/, assert/, exec/, httpnode/, types/
 internal/spike/              throwaway benchmark spike (step 2, removed after ADR)
 examples/                    sample pipeline YAML files
 docs/adr/                    committed ADRs
 ```
+
+Two packages were added after V0 and are not part of the plan below:
+
+```
+internal/trigger/            what starts a run in a served pipeline (ADR 0012)
+internal/daemon/             loading, routing, overlap, drain, quarantine (ADR 0012)
+```
+
+The plan listed a `scheduler.go` beside the executor. None was written: the
+dependency-counter scheduling turned out to be a few dozen lines inside
+`executor.go` and splitting it would have separated the loop from the state it
+owns.
 
 When out-of-tree node authoring becomes a real requirement (handoff section 32,
 external modules), `internal/node` is the package to promote to the root: it is
@@ -110,7 +137,24 @@ Engine overhead measured separately from node work, in `internal/runtime/bench_t
 
 ## Non-goals honored
 
-No interpolation DSL, no external module tiers (Tier 1/2), no warm/cold management, no scheduler, no persistence, no visual editor. `Any` type exists as an escape hatch only if a V0 node forces it; otherwise omitted.
+At V0: no interpolation DSL, no external module tiers (Tier 1/2), no warm/cold
+management, no scheduler, no persistence, no visual editor. `Any` was allowed
+for as an escape hatch only if a V0 node forced it; none did, so it was never
+built and still does not exist.
+
+Two of those have moved since, each deliberately and with an ADR:
+
+- **A scheduler.** `trigger.schedule` fires a pipeline on an interval, so the
+  flat "no scheduler" no longer holds. What is still refused is cron syntax with
+  timezones, and any notion of scheduling *steps* within a run: the executor is
+  unchanged, and a trigger only supplies a run's inputs (ADR 0012).
+- **Persistence** is now deferred rather than refused. Nothing survives a run,
+  which is what keeps the daemon small, but asynchronous replies, restart
+  survival and run history all reduce to it and are worth deciding together if
+  any of them is taken on (ADR 0012).
+
+The interpolation DSL was pressed hardest by data-dependent values and refused
+again: template placeholders became typed input ports instead (ADR 0010).
 
 ## Verification
 
