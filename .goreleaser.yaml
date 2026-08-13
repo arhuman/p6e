@@ -1,0 +1,94 @@
+# goreleaser v2. A v* tag triggers .github/workflows/release.yml, which runs
+# `goreleaser release --clean` against this file.
+#
+# Validate without releasing:
+#   goreleaser check
+#   goreleaser build --snapshot --clean
+version: 2
+
+project_name: p6e
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: p6e
+    main: ./cmd/p6e
+    binary: p6e
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      # The same three symbols the Makefile stamps, so a release binary and a
+      # local `make build` report their version the same way. They live in
+      # package main because that is where the CLI declares them.
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.GitCommit={{ .ShortCommit }}
+      - -X main.BuildDate={{ .CommitDate }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # All six combinations compile; none is excluded.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # A pipeline engine is no use without the format reference, and someone who
+    # downloaded a tarball has no repo to read it from. The licence travels with
+    # the binary for the same reason: an archive that omits it leaves whoever
+    # unpacked it unable to say what they may do with it.
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - docs/pipeline.md
+      - examples/*.yaml
+
+checksum:
+  name_template: checksums.txt
+
+# syft and cosign must be on PATH in CI or goreleaser fails with "executable
+# file not found". release.yml installs both.
+sboms:
+  - artifacts: archive
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - --output-signature=${signature}
+      - --output-certificate=${certificate}
+      - ${artifact}
+      - --yes
+    artifacts: checksum
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  draft: false
+  # 0.x and any -rc tag publish as a prerelease, which is what this is until the
+  # node contract stops moving (ADR 0007).
+  prerelease: auto

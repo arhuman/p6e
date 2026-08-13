@@ -370,5 +370,33 @@ make test    # run tests
 make bench   # engine overhead benchmarks
 make race    # tests under the race detector
 make audit   # vet + lint + vuln scan + coverage gate
+make ci      # the full local gate: tidy + audit + race
 make image   # build the container image
 ```
+
+CI runs those same targets rather than restating their commands, so what passes
+locally and what passes on a push cannot drift.
+
+## Releasing
+
+```bash
+make release
+```
+
+It derives the next version from the Conventional Commits since the last `v*`
+tag (`feat` minor, `fix` patch, `!` major, capped to minor while on 0.x), offers
+it as an editable default, runs `make ci`, then tags and pushes. Pushing the tag
+is what triggers the release workflow: goreleaser builds static, `-trimpath`,
+version-stamped binaries for linux, macOS and Windows on amd64 and arm64,
+attaches an SBOM, and signs the checksums with cosign.
+
+Each archive carries the binary plus the LICENSE, the README, the format
+reference and the examples, so an unpacked tarball is self-contained.
+
+One thing it still needs that this repo does not have: an `origin` remote to
+push to. `make release` refuses with a clear message rather than failing
+somewhere further in.
+
+## License
+
+MIT. See `LICENSE`.

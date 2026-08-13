@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release and upload assets
+  id-token: write # cosign keyless signing over OIDC, per .goreleaser.yaml signs:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # goreleaser needs the full history and tags to build the changelog.
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          # Release binaries ship built with the latest stable Go, for its
+          # runtime and stdlib security fixes, independent of the go.mod floor
+          # that CI also tests against.
+          go-version: stable
+
+      # A tag that cannot pass the gate must not become a release. This is the
+      # same audit developers and CI run, so there is one definition of "good".
+      - name: Audit
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          make audit
+      - name: Test (race)
+        run: make race
+
+      # .goreleaser.yaml declares sboms: and signs:, so syft and cosign have to
+      # be on PATH before goreleaser runs.
+      - uses: anchore/sbom-action/download-syft@v0
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

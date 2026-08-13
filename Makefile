@@ -6,6 +6,7 @@
 BINARY := p6e
 BIN_DIR := bin
 
+
 # Quality gate. A ratchet: raise it as coverage improves, never lower it to
 # green a build.
 COVER_MIN ?= 85
@@ -29,7 +30,7 @@ LDFLAGS := -s -w \
 # ==================================================================================== #
 # PHONY DECLARATIONS (in alphabetical order)
 # ==================================================================================== #
-.PHONY: audit bench build clean confirm cover down fulltest help image logs race release test tidy tools up
+.PHONY: audit bench build ci clean confirm cover down fulltest help image logs race release test tidy tools up
 
 # ==================================================================================== #
 # STANDARD TARGETS (in alphabetical order)
@@ -53,6 +54,12 @@ bench:
 # reproducible paths.
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) ./cmd/p6e
+
+## ci: run the full local gate (tidy, audit, race)
+# Deliberately not `tidy audit fulltest`: audit already runs the whole suite
+# through cover, so adding fulltest would be a third full run for nothing. race
+# is here because it is the one pass that tests something the others cannot.
+ci: tidy audit race
 
 ## clean: clean Go build and test cache and remove built binaries
 clean:
@@ -102,8 +109,11 @@ logs:
 race:
 	go test -race ./...
 
-## release: run the full release pipeline (test, build, audit)
-release: test build audit
+## release: cut and publish a release (derive version, gate, tag, push)
+# Pushing the v* tag is what triggers .github/workflows/release.yml and
+# goreleaser. The gate lives in `ci`, which this runs; it is not repeated here.
+release:
+	@./scripts/release.sh
 
 ## test: run short tests with coverage (use fulltest to include long tests)
 test:
