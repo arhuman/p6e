@@ -45,16 +45,32 @@ services:
       - traefik.http.middlewares.p6e-headers.headers.browserXssFilter=true
       - traefik.http.middlewares.p6e-headers.headers.referrerPolicy=no-referrer
 
+      # Edge authentication. A webhook pipeline with no `auth` block in its
+      # trigger runs for anyone who can reach this router, and the exec node
+      # runs local processes, so an open route in front of a pipeline that
+      # shells out is remote process execution.
+      #
+      # This is deliberately belt and braces with the trigger's own signature
+      # check (ADR 0013): the two answer different questions. A proxy cannot
+      # verify a sender's HMAC scheme on the daemon's behalf, and a signature
+      # does not authenticate anyone who has no scheme to sign with.
+      #
+      # Generate the hash with: htpasswd -nbB <user> <password>
+      # Then put the result in .env as P6E_BASIC_AUTH, doubling every $ sign.
+      # Comment the middleware out only if every served pipeline configures
+      # trigger auth, and say so in your deployment notes.
+      - "traefik.http.middlewares.p6e-auth.basicauth.users=${P6E_BASIC_AUTH:?set P6E_BASIC_AUTH in .env, or read the comment above before removing this}"
+
       # Canonical www plus a bare apex router, two routers onto one service.
       - "traefik.http.routers.p6e.rule=Host(`www.${APEX_DOMAIN:?set APEX_DOMAIN in .env}`)"
       - traefik.http.routers.p6e.entrypoints=websecure
       - traefik.http.routers.p6e.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
       - traefik.http.routers.p6e.priority=1
-      - traefik.http.routers.p6e.middlewares=p6e-headers@docker
+      - traefik.http.routers.p6e.middlewares=p6e-auth@docker,p6e-headers@docker
       - "traefik.http.routers.p6e-bare.rule=Host(`${APEX_DOMAIN}`)"
       - traefik.http.routers.p6e-bare.entrypoints=websecure
       - traefik.http.routers.p6e-bare.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
-      - traefik.http.routers.p6e-bare.middlewares=p6e-headers@docker
+      - traefik.http.routers.p6e-bare.middlewares=p6e-auth@docker,p6e-headers@docker
     # A pipeline can shell out and make HTTP calls, so it is worth bounding what
     # one bad pipeline can take from the host. The step budget bounds goroutines
     # inside the process; this bounds the process itself.

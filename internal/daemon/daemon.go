@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -186,6 +187,11 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		}
 		go func() { serverErr <- listenAndServe(d.server, "webhook listener") }()
 		d.log.Info("serving webhooks", slog.String("addr", d.addr), slog.Int("routes", len(d.routes)))
+		if open := d.openRoutes(); len(open) > 0 {
+			d.log.Warn("serving webhook routes that authenticate nothing: anyone who can reach the listener can start these runs",
+				slog.String("routes", strings.Join(open, ", ")),
+				slog.String("remedy", "give the trigger an auth block, or front the listener with an authenticating proxy"))
+		}
 	}
 
 	// Either listener failing ends the daemon: a process that answers webhooks
@@ -206,6 +212,20 @@ func (d *Daemon) Serve(ctx context.Context) error {
 	// it. That is the window a rolling deploy needs to see.
 	d.shutdown(d.admin, "admin listener")
 	return failure
+}
+
+// openRoutes lists the claim keys of webhook routes that verify nothing, in
+// sorted order so the warning does not shuffle between restarts.
+func (d *Daemon) openRoutes() []string {
+	var open []string
+	for key, p := range d.routes {
+		auth, ok := p.Trigger().(trigger.Authenticating)
+		if !ok || !auth.Authenticated() {
+			open = append(open, key)
+		}
+	}
+	sort.Strings(open)
+	return open
 }
 
 // listen runs one self-driven trigger's loop, and survives it panicking.

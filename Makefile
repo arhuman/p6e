@@ -150,6 +150,10 @@ preflight:
 	[ "$$APEX_DOMAIN" != example.invalid ]  || bad="$$bad\n  APEX_DOMAIN is still the env.sample default"; \
 	[ "$$APEX_DOMAIN" != example.com ]      || bad="$$bad\n  APEX_DOMAIN is still a placeholder"; \
 	[ -d "$${P6E_PIPELINES:-./examples}" ]  || bad="$$bad\n  P6E_PIPELINES does not exist: $${P6E_PIPELINES}"; \
+	[ -n "$$P6E_BASIC_AUTH" ]               || bad="$$bad\n  P6E_BASIC_AUTH is empty (the webhook routers would serve an unauthenticated endpoint)"; \
+	case "$$P6E_BASIC_AUTH" in *replace.this.with*|changeme:*) \
+	  bad="$$bad\n  P6E_BASIC_AUTH is still the env.sample placeholder: generate one with htpasswd -nbB, doubling every \$$";; \
+	esac; \
 	case "$${P6E_PIPELINES:-./examples}" in ./examples|examples) \
 	  bad="$$bad\n  P6E_PIPELINES still points at the shipped examples, which include a deliberately broken pipeline and are not a deployment";; \
 	esac; \

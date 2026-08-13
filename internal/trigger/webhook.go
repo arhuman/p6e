@@ -1,6 +1,7 @@
 package trigger
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -34,6 +35,9 @@ type webhookConfig struct {
 	Method string `yaml:"method"`
 	// MaxBody overrides DefaultMaxBodyBytes.
 	MaxBody int64 `yaml:"max_body"`
+	// Auth, when set, requires every event to carry a valid signature. Absent
+	// means the route is open to anyone who can reach the listener.
+	Auth *authConfig `yaml:"auth"`
 }
 
 // WebhookDefinition is the "trigger.webhook" capability: a pipeline runs once
@@ -78,10 +82,16 @@ func newWebhook(cfg node.Config) (Trigger, error) {
 		maxBody = DefaultMaxBodyBytes
 	}
 
+	auth, err := c.Auth.compile(WebhookName)
+	if err != nil {
+		return nil, err
+	}
+
 	return &webhook{
 		path:    c.Path,
 		method:  method,
 		maxBody: maxBody,
+		auth:    auth,
 		desc: Descriptor{
 			Name: WebhookName,
 			Provides: []node.PortDescriptor{
@@ -103,8 +113,16 @@ type webhook struct {
 	path    string
 	method  string
 	maxBody int64
-	desc    Descriptor
+	// auth is nil when the route is unauthenticated, which is the default and
+	// is why SECURITY.md tells an operator to front the listener.
+	auth *verifier
+	desc Descriptor
 }
+
+// Authenticated reports whether this webhook verifies a signature. The daemon
+// uses it to warn about open routes at startup rather than leaving the fact
+// buried in a pipeline file.
+func (w *webhook) Authenticated() bool { return w.auth != nil }
 
 func (w *webhook) Descriptor() Descriptor { return w.desc }
 
@@ -152,6 +170,19 @@ func (w *webhook) Values(r *http.Request) (map[string]node.Value, error) {
 	if int64(len(body)) > w.maxBody {
 		return nil, node.Errf(node.KindInvalidInput, "body_too_large",
 			"request body is larger than %d bytes", w.maxBody)
+	}
+
+	// Authentication comes after the size cap and before anything else: the
+	// signature is computed over the raw body, so the body must be read first,
+	// and nothing beyond reading it should happen for an event that turns out
+	// not to be authentic.
+	if w.auth != nil {
+		if reason, err := w.auth.verify(r, body); err != nil {
+			if reason != "" {
+				err.Cause = fmt.Errorf("%s", reason)
+			}
+			return nil, err
+		}
 	}
 
 	return map[string]node.Value{

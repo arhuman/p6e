@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -46,9 +47,21 @@ func (d *Daemon) handle(p *Pipeline) http.HandlerFunc {
 
 		values, err := driven.Values(r)
 		if err != nil {
+			// A rejection before the run gets the same code-to-status mapping
+			// as a failure during it, so an unauthenticated event answers 401
+			// rather than being flattened into "bad request".
+			status, body := http.StatusBadRequest, err.Error()
+			var nerr *node.NodeError
+			if errors.As(err, &nerr) {
+				status = statusFor(nerr)
+				// The caller is told only that it was refused. The reason,
+				// which distinguishes a missing header from a wrong signature,
+				// goes to the log for the operator.
+				body = nerr.Message
+			}
 			d.log.Warn("rejected a request before running anything",
 				slog.String("pipeline", p.Name), slog.String("error", err.Error()))
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, body, status)
 			return
 		}
 
@@ -78,6 +91,8 @@ func statusFor(err *node.NodeError) int {
 	switch {
 	case err == nil:
 		return http.StatusOK
+	case err.Code == trigger.CodeUnauthorized:
+		return http.StatusUnauthorized
 	case err.Code == codeOverlapped:
 		return http.StatusTooManyRequests
 	case err.Code == codeQuarantined, err.Code == codeDraining:

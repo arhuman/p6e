@@ -135,6 +135,18 @@ type HTTPDriven interface {
 	Respond(w http.ResponseWriter, value node.Value) error
 }
 
+// Authenticating is implemented by an HTTPDriven trigger that can verify an
+// event came from who it claims to.
+//
+// It is a separate, optional interface rather than a method on HTTPDriven
+// because a trigger that cannot authenticate at all is a coherent thing to
+// write, and forcing it to answer would mean forcing it to lie. A trigger that
+// does not implement this, or that reports false, is serving an open route,
+// and the daemon says so at startup rather than leaving it to be discovered.
+type Authenticating interface {
+	Authenticated() bool
+}
+
 // Fire runs the pipeline once with the values one event supplied. The daemon
 // gives it to a trigger, and it is safe for concurrent use: a trigger firing
 // again before the previous run finished is normal, and what happens then is

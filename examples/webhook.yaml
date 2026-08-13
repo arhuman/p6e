@@ -25,6 +25,16 @@ trigger:
   with:
     path: /hooks/deploy
     method: POST
+    # Without this block the route authenticates nothing: anyone who can reach
+    # the listener starts the run, and the daemon warns about it at startup.
+    # It is commented out here only because an example must run with no
+    # environment to set up. In anything real, uncomment it.
+    #
+    # auth:
+    #   scheme: hmac-sha256
+    #   header: X-Hub-Signature-256
+    #   prefix: "sha256="
+    #   secret_env: DEPLOY_WEBHOOK_SECRET
   # Required, because a caller holds a connection open until the run ends.
   timeout: 30s
   # The step whose output becomes the response body. It has to produce Bytes or
