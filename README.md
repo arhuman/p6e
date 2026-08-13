@@ -66,13 +66,27 @@ $ ./bin/p6e run examples/parameterized.yaml --input owner=golang --input repo=go
 
 ```
 $ ./bin/p6e nodes
+assert.true
 condition
+env.get
 exec
 exec.command
+exec.exit_code
+exec.stderr
+exec.stdout
+http.assert_status
 http.body
 http.build
+http.from_url
+http.header
 http.request
+http.status
+http.with_body
+http.with_header
 json.decode
+json.encode
+json.get
+text.format
 value
 ```
 
@@ -255,7 +269,7 @@ nodes you control. See ADR 0003, ADR 0004 and ADR 0008.
 ## Adding a node
 
 Nodes are added in-tree: register a `node.Definition` in `internal/nodes` and it
-is available to every pipeline, with no engine change of any kind. The eight
+is available to every pipeline, with no engine change of any kind. All 22
 built-ins were written against exactly the interface described above.
 
 Out-of-tree authoring is not possible yet, because every package is under
