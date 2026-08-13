@@ -62,6 +62,11 @@ type Response struct {
 	Body    []byte
 }
 
+// Time is an instant, such as when a schedule fired.
+type Time struct {
+	Value time.Time
+}
+
 // Command describes a local process to run.
 type Command struct {
 	Name string
@@ -85,6 +90,7 @@ func init() {
 	node.RegisterType[*Text]("Text")
 	node.RegisterType[*Bool]("Bool")
 	node.RegisterType[*Int]("Int")
+	node.RegisterType[*Time]("Time")
 	node.RegisterType[*Document]("JSONDocument")
 	node.RegisterType[*Request]("HTTPRequest")
 	node.RegisterType[*Response]("HTTPResponse")
