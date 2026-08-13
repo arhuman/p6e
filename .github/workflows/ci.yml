@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: CI only reads the repo.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor = the go.mod minimum; "stable" = latest release, for stdlib
+        # security patches. Note go.mod also pins `toolchain go1.26.5`, so the
+        # floor job builds with that toolchain unless GOTOOLCHAIN says otherwise.
+        go: ["1.26", "stable"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+      - name: Build
+        run: make build
+      - name: Test
+        run: make test
+      # A separate target because p6e keeps the race detector off the quick
+      # path. It is not optional here: the slot pool, the daemon's drain and the
+      # quarantine counter are exactly the code a race regression hides in.
+      - name: Test (race)
+        run: make race
+      - name: Benchmarks (smoke, 1x)
+        run: go test -run='^$' -bench=. -benchmem -benchtime=1x ./...
+
+  lint:
+    name: lint + vuln + coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      # Pre-install the pinned tools so `make audit` reuses them instead of
+      # bootstrapping through `make tools`. These versions MUST equal the
+      # Makefile's GOLANGCI_VERSION and GOVULNCHECK_VERSION.
+      - name: Install pinned tools
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      # go mod verify + vet + lint + govulncheck + the coverage gate, through
+      # the same target a developer runs. One code path, local and CI.
+      - name: Audit
+        run: make audit
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: warn
+
+  cli:
+    name: shipped binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: make build
+      # The Go tests exercise the CLI's run() in process; nothing until here has
+      # run the binary that actually ships. These steps do.
+      - name: Every shipped example still checks
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in examples/*.yaml; do
+            if [ "$(basename "$f")" = "broken.yaml" ]; then
+              # broken.yaml is deliberately mistyped and is the README's worked
+              # example of a rejection. If it ever passes, the claim that makes
+              # this engine worth using has quietly stopped being true.
+              if ./bin/p6e check "$f" >/dev/null 2>&1; then
+                echo "::error file=examples/broken.yaml::compiles, but it exists to fail"
+                fail=1
+              fi
+              continue
+            fi
+            if ! ./bin/p6e check "$f"; then
+              echo "::error file=$f::no longer compiles"
+              fail=1
+            fi
+          done
+          exit $fail
+      - name: A directory of triggered pipelines loads
+        run: |
+          set -euo pipefail
+          servable=$(mktemp -d)
+          cp examples/webhook.yaml examples/schedule.yaml "$servable/"
+          ./bin/p6e check --dir "$servable"
+      - name: Two pipelines claiming one route are refused
+        run: |
+          set -euo pipefail
+          clash=$(mktemp -d)
+          cp examples/webhook.yaml "$clash/first.yaml"
+          cp examples/webhook.yaml "$clash/second.yaml"
+          if ./bin/p6e check --dir "$clash" >/dev/null 2>&1; then
+            echo "::error::a duplicated webhook route was accepted, so the gate is not gating"
+            exit 1
+          fi
+
+  commitlint:
+    name: commit messages
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Conventional Commits on PR commits
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9/_.-]+\))?(!)?: .+'
+          fail=0
+          for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            subject=$(git log -1 --format=%s "$sha")
+            if ! printf '%s' "$subject" | grep -qE "$pattern"; then
+              echo "::error::commit $sha is not Conventional Commits: '$subject'"
+              fail=1
+            fi
+          done
+          exit $fail

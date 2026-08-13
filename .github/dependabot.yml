@@ -1,0 +1,19 @@
+# Weekly dependency updates. gomod PRs are prefixed `build` and github-actions
+# PRs `ci`, matching Conventional Commits so the commitlint gate passes.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
