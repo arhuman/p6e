@@ -63,7 +63,7 @@ jobs:
       # the same target a developer runs. One code path, local and CI.
       - name: Audit
         run: make audit
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage
