@@ -16,7 +16,7 @@ services:
         VERSION: ${P6E_VERSION:-dev}
         COMMIT: ${P6E_COMMIT:-unknown}
         BUILD_DATE: ${P6E_BUILD_DATE:-unknown}
-    image: p6e:${P6E_TAG:-0.1.0}
+    image: p6e:${P6E_TAG:-dev}
     environment:
       TZ: ${TZ:-UTC}
     # The pipeline directory is the unit of deployment. Read-only because the
