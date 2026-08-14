@@ -140,8 +140,8 @@ steps:
     uses: exec
     needs: [cmd]
   never:
-    uses: exec
-    needs: [cmd]
+    uses: exec.stdout
+    needs: [run]
 `)
 
 	_, stdout, _ := invoke(t, "run", path)
