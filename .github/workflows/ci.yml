@@ -22,8 +22,9 @@ jobs:
       fail-fast: false
       matrix:
         # Floor = the go.mod minimum; "stable" = latest release, for stdlib
-        # security patches. Note go.mod also pins `toolchain go1.26.5`, so the
-        # floor job builds with that toolchain unless GOTOOLCHAIN says otherwise.
+        # security patches. Note go.mod also carries a `toolchain` directive, so
+        # the floor job builds with that toolchain unless GOTOOLCHAIN says
+        # otherwise.
         go: ["1.26", "stable"]
     steps:
       - uses: actions/checkout@v7
