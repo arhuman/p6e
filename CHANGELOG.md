@@ -9,6 +9,8 @@ While the project is on 0.x, a breaking change bumps the minor version.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-14
+
 ### Added
 
 - Typed pipeline engine: a YAML file compiles to a statically type-checked DAG,
