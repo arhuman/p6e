@@ -381,9 +381,9 @@ p6e check --dir /path/to/pipelines
 
 ## Status and non-goals
 
-V0, under active development; see `PLAN.md`. Deliberately absent: an
-expression or interpolation DSL, external module tiers, distributed execution,
-and a visual editor.
+V0, under active development. The decisions behind it are in `docs/adr/`.
+Deliberately absent: an expression or interpolation DSL, external module tiers,
+distributed execution, and a visual editor.
 
 `p6e serve` runs a directory of pipelines, each when its trigger fires. It is
 deliberately small: interval schedules with no cron syntax, synchronous webhook
