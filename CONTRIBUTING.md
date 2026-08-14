@@ -33,6 +33,31 @@ restating their commands, so a green local run means a green CI run.
 Coverage is a ratchet. Raise `COVER_MIN` as it improves; never lower it to make
 a red build pass.
 
+### Mutation score
+
+Coverage says a line ran. It does not say a test would notice if that line were
+wrong, so the number worth knowing is how many deliberate mutations the suite
+kills. Measured with [gremlins](https://github.com/go-gremlins/gremlins), which
+is not part of the gate because it is slow and needs a long per-mutant timeout:
+
+```bash
+go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+gremlins unleash --timeout-coefficient 20 ./internal/pipeline
+```
+
+| Package | Efficacy | Measured |
+|---|---|---|
+| `internal/node` | 90.9% | 2026-08-14 |
+| `internal/pipeline` | 77.0% | 2026-08-14 |
+
+Both are above the 60% bar. Treat them as a floor the way `COVER_MIN` is one.
+
+`internal/runtime` and `internal/daemon` are **not** measurable this way and the
+reason is worth knowing rather than retrying: mutating a scheduler's conditions
+or counters usually deadlocks the run instead of failing it, so every mutant
+comes back as a timeout and the score means nothing. Those two packages are
+pinned by the race detector and by the bounds, slots and drain suites instead.
+
 ## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/), enforced by CI on
