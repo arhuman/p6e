@@ -253,10 +253,17 @@ Measured on an Apple M3 Pro, Go 1.26.5, darwin/arm64 (`docs/adr/0003-v0-baseline
 - Compiling a 100-step pipeline takes 34 us, paid once per plan and never per
   run.
 
+ADR 0003 records the figures as first measured. Two have moved since, both from
+extracting the coordinator into a `scheduler` type: a run allocates two more
+times (112 to 114, or 12 to 14 under `--inline`) because that type is one
+allocation and its methods no longer share a closure frame, and it allocates 6
+to 16% fewer bytes for the same reason. Per-step time did not change
+measurably.
+
 Most of a step's cost is the scheduler's goroutine handoff, which measures
 268 ns on its own. `p6e run --inline` removes it for any step that is the only
 one ready, taking a 100-step chain from 491 to **98 ns per step** and its
-allocations from 112 to 12 per run. Fan-out is unaffected, since only the root of
+allocations from 114 to 14 per run. Fan-out is unaffected, since only the root of
 a fan-out is ever solitary.
 
 It is off by default, and the reason is worth knowing: an inlined step runs on
