@@ -1311,7 +1311,7 @@ this step's.
 
 ## Errors
 
-Every node failure is a `NodeError` with a fixed vocabulary, never a panic used
+Every node failure is a `node.Error` with a fixed vocabulary, never a panic used
 as control flow. A panic at the node boundary is recovered and normalised to
 `internal`.
 
@@ -1323,7 +1323,7 @@ as control flow. A panic at the node boundary is recovered and normalised to
 | `cancelled` | The execution was cancelled or its deadline expired. | no |
 | `internal` | The node or the engine broke. Recovered panics land here. | no |
 
-A `NodeError` also carries a `Code` (a node-specific identifier, stable enough to
+A `node.Error` also carries a `Code` (a node-specific identifier, stable enough to
 match on, listed per node above) and a human-facing `Message`.
 
 An unknown Go error that a node forwards without classifying is treated as
@@ -1351,6 +1351,14 @@ itself.
 running 5 seconds after the execution stopped is abandoned and marked
 `cancelled`, so one node ignoring cancellation cannot wedge the process (ADR
 0004).
+
+A node may declare that it returns promptly on cancellation, which `exec` does
+because it kills the process it started. The deadline is identical either way,
+since Go cannot verify the claim; what changes is the report. An abandoned step
+whose node made that promise fails with `broken_cancellation` and kind
+`internal`, saying the promise is wrong, rather than `abandoned` and kind
+`cancelled`. The two mean opposite things to whoever is holding the incident:
+a bug in one node, or the documented cost of ADR 0004. See ADR 0016.
 
 **Step states:** `succeeded`, `failed`, `cancelled`, `skipped`.
 

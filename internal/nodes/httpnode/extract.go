@@ -21,10 +21,9 @@ const (
 //
 // It takes no configuration. A with block is rejected rather than ignored.
 func StatusDefinition() node.Definition {
-	return node.Static(StatusName, node.NewTypedNode(StatusName,
-		func(_ context.Context, _ *node.ExecutionContext, resp *types.Response) node.Result[*types.Int] {
-			return node.Ok(&types.Int{Value: int64(resp.Status)})
-		}))
+	return node.Extractor(StatusName, func(resp *types.Response) *types.Int {
+		return &types.Int{Value: int64(resp.Status)}
+	})
 }
 
 // headerConfig is an http.header step's with block.

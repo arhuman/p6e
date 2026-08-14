@@ -161,9 +161,9 @@ func TestValueRejectsAnUnknownConfigField(t *testing.T) {
 func TestValueConfigErrorsAreInvalidInput(t *testing.T) {
 	_, err := Definition().New(withBlock("type: Blob\nvalue: x\n"))
 
-	var ne *node.NodeError
+	var ne *node.Error
 	if !errors.As(err, &ne) {
-		t.Fatalf("err is %T, want *node.NodeError", err)
+		t.Fatalf("err is %T, want *node.Error", err)
 	}
 	if ne.Kind != node.KindInvalidInput {
 		t.Errorf("Kind = %q, want %q", ne.Kind, node.KindInvalidInput)

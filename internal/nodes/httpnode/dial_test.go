@@ -72,7 +72,7 @@ func TestRequestRefusesInternalDestinationByDefault(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	err := fails(t, request(t, t.Context(), "", &types.Request{URL: srv.URL}))
+	err := fails(t, request(t, t.Context(), "", &types.Request{URL: checked(t, srv.URL)}))
 
 	if !strings.Contains(err.Error(), "loopback") {
 		t.Errorf("error = %q, want it to name the refused address class", err.Error())
@@ -86,7 +86,7 @@ func TestRequestReachesInternalDestinationWhenAllowed(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: srv.URL}))
+	succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: checked(t, srv.URL)}))
 }
 
 func TestCheckRedirectBoundsAndChecksScheme(t *testing.T) {

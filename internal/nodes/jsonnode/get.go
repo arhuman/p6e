@@ -91,7 +91,7 @@ func newGet(cfg node.Config) (node.RuntimeNode, error) {
 // function the document's value goes through. A default that does not fit the
 // declared type is therefore a configuration error rather than a surprise on
 // the first run that needs it.
-func getter[P any](path []string, raw *yaml.Node, convert func(any) (P, *node.NodeError)) (node.RuntimeNode, error) {
+func getter[P any](path []string, raw *yaml.Node, convert func(any) (P, *node.Error)) (node.RuntimeNode, error) {
 	var fallback P
 	hasDefault := !raw.IsZero()
 	if hasDefault {
@@ -125,7 +125,7 @@ func getter[P any](path []string, raw *yaml.Node, convert func(any) (P, *node.No
 		}), nil
 }
 
-func toText(v any) (*types.Text, *node.NodeError) {
+func toText(v any) (*types.Text, *node.Error) {
 	s, ok := v.(string)
 	if !ok {
 		return nil, mismatch("Text", "a string", v)
@@ -133,7 +133,7 @@ func toText(v any) (*types.Text, *node.NodeError) {
 	return &types.Text{Value: s}, nil
 }
 
-func toBytes(v any) (*types.Bytes, *node.NodeError) {
+func toBytes(v any) (*types.Bytes, *node.Error) {
 	s, ok := v.(string)
 	if !ok {
 		return nil, mismatch("Bytes", "a string", v)
@@ -141,7 +141,7 @@ func toBytes(v any) (*types.Bytes, *node.NodeError) {
 	return &types.Bytes{Value: []byte(s)}, nil
 }
 
-func toBool(v any) (*types.Bool, *node.NodeError) {
+func toBool(v any) (*types.Bool, *node.Error) {
 	b, ok := v.(bool)
 	if !ok {
 		return nil, mismatch("Bool", "a boolean", v)
@@ -151,7 +151,7 @@ func toBool(v any) (*types.Bool, *node.NodeError) {
 
 // toInt accepts the several shapes a whole number arrives in: encoding/json
 // decodes every number as a float64, while a YAML default decodes as an int.
-func toInt(v any) (*types.Int, *node.NodeError) {
+func toInt(v any) (*types.Int, *node.Error) {
 	switch n := v.(type) {
 	case float64:
 		if n != math.Trunc(n) || math.IsInf(n, 0) || math.IsNaN(n) {
@@ -170,7 +170,7 @@ func toInt(v any) (*types.Int, *node.NodeError) {
 	}
 }
 
-func mismatch(as, want string, got any) *node.NodeError {
+func mismatch(as, want string, got any) *node.Error {
 	return node.Errf(node.KindInvalidInput, "type_mismatch",
 		"as: %s wants %s, but the value is %s", as, want, jsonpath.Describe(got))
 }

@@ -36,6 +36,46 @@ type RuntimeNode interface {
 	Execute(ctx context.Context, ec *ExecutionContext, inputs []Value) ResultValue
 }
 
+// Stoppable is implemented by a node that promises Execute returns promptly
+// once its context is done.
+//
+// It exists because the engine's whole abandonment apparatus (ADR 0004) is
+// built for the node it cannot stop, and treats every node as one. That is the
+// right default and it is wrong for some: exec waits on an external process,
+// which is the likeliest thing to outlive its context and also, unlike an
+// arbitrary Go function, genuinely killable.
+//
+// **The claim is a promise, not a proof.** Go cannot verify it, so nothing here
+// relies on it for safety: the abandonment deadline still applies to a
+// stoppable node exactly as it does to any other, and Run's timing guarantees
+// are unchanged. What the claim buys is a better diagnostic. A node that
+// declared this and was abandoned anyway has broken a contract it opted into,
+// which is a bug in that node, and saying so is more useful than reporting it
+// the same way as a node that never promised anything.
+//
+// Implement it with AsStoppable rather than by hand.
+type Stoppable interface {
+	// HonoursCancellation distinguishes this interface from any other single
+	// method one, and returns true for every implementation AsStoppable builds.
+	HonoursCancellation() bool
+}
+
+// AsStoppable marks n as honouring cancellation. See Stoppable for what that
+// promises and what it does not.
+func AsStoppable(n RuntimeNode) RuntimeNode { return stoppableNode{n} }
+
+type stoppableNode struct{ RuntimeNode }
+
+func (stoppableNode) HonoursCancellation() bool { return true }
+
+// HonoursCancellation reports whether n promised to return on cancellation. A
+// node that says nothing is treated as one that does not, which is the safe
+// reading and the existing behaviour.
+func HonoursCancellation(n RuntimeNode) bool {
+	s, ok := n.(Stoppable)
+	return ok && s.HonoursCancellation()
+}
+
 // NewSource adapts a node that takes no pipeline input, such as a constant or
 // a step configured entirely by its with block.
 func NewSource[O any](name string, fn func(context.Context, *ExecutionContext) Result[O]) RuntimeNode {
@@ -197,13 +237,13 @@ func erase[O any](r Result[O], outType TypeID) ResultValue {
 // Both report internal rather than invalid_input: the compiler proved these
 // cannot happen, so reaching one is an engine bug, and blaming the workflow
 // author would send the reader looking in the wrong place.
-func typeError(desc *Descriptor, port int, got TypeID) *NodeError {
+func typeError(desc *Descriptor, port int, got TypeID) *Error {
 	return Errf(KindInternal, "type_mismatch",
 		"node %q input %q expects %s but received %s",
 		desc.Name, desc.Inputs[port].Name, desc.Inputs[port].Type, got)
 }
 
-func arityError(desc *Descriptor, got int) *NodeError {
+func arityError(desc *Descriptor, got int) *Error {
 	return Errf(KindInternal, "arity_mismatch",
 		"node %q expects %d input(s), received %d", desc.Name, len(desc.Inputs), got)
 }

@@ -40,7 +40,7 @@ func TestNormalizePassesThroughNodeError(t *testing.T) {
 	original := Errf(KindTransient, "timeout", "took too long")
 
 	if got := Normalize(fmt.Errorf("wrapped: %w", original), "fallback"); got != original {
-		t.Errorf("Normalize = %+v, want the original NodeError", got)
+		t.Errorf("Normalize = %+v, want the original Error", got)
 	}
 }
 
@@ -87,9 +87,9 @@ func TestNodeErrorUnwraps(t *testing.T) {
 	e := Wrap(cause, KindTransient, "net", "connection failed")
 
 	if !errors.Is(e, cause) {
-		t.Error("NodeError should unwrap to its cause")
+		t.Error("Error should unwrap to its cause")
 	}
-	if got, ok := errors.AsType[*NodeError](fmt.Errorf("step: %w", e)); !ok || got != e {
-		t.Error("NodeError should be recoverable with errors.AsType through wrapping")
+	if got, ok := errors.AsType[*Error](fmt.Errorf("step: %w", e)); !ok || got != e {
+		t.Error("Error should be recoverable with errors.AsType through wrapping")
 	}
 }

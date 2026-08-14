@@ -37,7 +37,13 @@ func Definition() node.Definition {
 
 // runner holds nothing, so one instance serves every step and every concurrent
 // execution.
-var runner = node.NewTypedNode(Name, run)
+//
+// It is marked stoppable because it genuinely is: exec.CommandContext kills the
+// process when the context ends, and WaitDelay bounds the wait for a
+// backgrounded grandchild still holding the output pipe. That makes exec one of
+// the few nodes that can honestly promise to return on cancellation, and the
+// likeliest one to be suspected when a run is abandoned.
+var runner = node.AsStoppable(node.NewTypedNode(Name, run))
 
 func run(ctx context.Context, _ *node.ExecutionContext, cmd *types.Command) node.Result[*types.CommandResult] {
 	if cmd.Name == "" {
@@ -82,7 +88,7 @@ func run(ctx context.Context, _ *node.ExecutionContext, cmd *types.Command) node
 // outer is the execution's own context and inner adds Command.Timeout. Checking
 // outer first is what distinguishes a cancelled execution, which no retry can
 // help, from a command that outran its own budget, which one might.
-func classify(outer, inner context.Context, cmd *types.Command, err error) (int, *node.NodeError) {
+func classify(outer, inner context.Context, cmd *types.Command, err error) (int, *node.Error) {
 	if outer.Err() != nil {
 		return 0, node.Normalize(outer.Err(), "cancelled")
 	}

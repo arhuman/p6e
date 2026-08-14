@@ -15,7 +15,7 @@ type ResultMeta struct {
 // outcome: if Err is non-nil, Value is meaningless.
 type Result[T any] struct {
 	Value T
-	Err   *NodeError
+	Err   *Error
 	Meta  ResultMeta
 }
 
@@ -23,13 +23,13 @@ type Result[T any] struct {
 func Ok[T any](v T) Result[T] { return Result[T]{Value: v} }
 
 // Fail returns a failed result.
-func Fail[T any](err *NodeError) Result[T] { return Result[T]{Err: err} }
+func Fail[T any](err *Error) Result[T] { return Result[T]{Err: err} }
 
 // ResultValue is Result with the type parameter erased: what the plan and the
 // executor actually move around.
 type ResultValue struct {
 	Value Value
-	Err   *NodeError
+	Err   *Error
 	Meta  ResultMeta
 }
 

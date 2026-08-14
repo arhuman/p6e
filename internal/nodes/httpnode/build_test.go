@@ -33,7 +33,7 @@ func TestBuildDefinitionBuildsFromConfig(t *testing.T) {
 	if req.Method != "POST" {
 		t.Errorf("Method = %q, want POST: methods are normalized to upper case", req.Method)
 	}
-	if req.URL != "https://example.com/api" {
+	if req.URL.String() != "https://example.com/api" {
 		t.Errorf("URL = %q, want https://example.com/api", req.URL)
 	}
 	if req.Headers["X-Token"] != "secret" {

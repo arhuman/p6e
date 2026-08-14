@@ -27,10 +27,10 @@ const (
 	KindInternal ErrorKind = "internal"
 )
 
-// NodeError is the normalized failure every node reports. Arbitrary Go errors
+// Error is the normalized failure every node reports. Arbitrary Go errors
 // from a library never reach workflow semantics: they are wrapped here first,
 // so the policy layer has a fixed vocabulary to act on.
-type NodeError struct {
+type Error struct {
 	// Code is a node-specific identifier, stable enough to match on, for
 	// example "http_status" or "exec_not_found".
 	Code string
@@ -48,7 +48,7 @@ type NodeError struct {
 }
 
 // Error implements error.
-func (e *NodeError) Error() string {
+func (e *Error) Error() string {
 	if e.Cause != nil {
 		return fmt.Sprintf("%s [%s/%s]: %v", e.Message, e.Kind, e.Code, e.Cause)
 	}
@@ -56,12 +56,12 @@ func (e *NodeError) Error() string {
 }
 
 // Unwrap exposes the cause to errors.Is and errors.As.
-func (e *NodeError) Unwrap() error { return e.Cause }
+func (e *Error) Unwrap() error { return e.Cause }
 
-// Errf builds a NodeError. Retryable is derived from kind; assign the field
+// Errf builds a Error. Retryable is derived from kind; assign the field
 // afterwards to override it.
-func Errf(kind ErrorKind, code, format string, args ...any) *NodeError {
-	return &NodeError{
+func Errf(kind ErrorKind, code, format string, args ...any) *Error {
+	return &Error{
 		Code:      code,
 		Kind:      kind,
 		Message:   fmt.Sprintf(format, args...),
@@ -69,24 +69,24 @@ func Errf(kind ErrorKind, code, format string, args ...any) *NodeError {
 	}
 }
 
-// Wrap builds a NodeError around an existing Go error. This is the boundary
+// Wrap builds a Error around an existing Go error. This is the boundary
 // where library errors stop being library errors.
-func Wrap(err error, kind ErrorKind, code, format string, args ...any) *NodeError {
+func Wrap(err error, kind ErrorKind, code, format string, args ...any) *Error {
 	e := Errf(kind, code, format, args...)
 	e.Cause = err
 	return e
 }
 
-// Normalize converts an arbitrary Go error into a NodeError, so a node that
+// Normalize converts an arbitrary Go error into a Error, so a node that
 // simply forwards an error still produces something policy can read.
 // Cancellation and deadlines are recognized; everything else is permanent
 // until a node says otherwise, because guessing that an unknown failure is
 // retryable turns one failure into several.
-func Normalize(err error, code string) *NodeError {
+func Normalize(err error, code string) *Error {
 	if err == nil {
 		return nil
 	}
-	if ne, ok := errors.AsType[*NodeError](err); ok {
+	if ne, ok := errors.AsType[*Error](err); ok {
 		return ne
 	}
 	switch {

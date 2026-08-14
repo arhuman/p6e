@@ -162,13 +162,10 @@ func RequestDefinition() node.Definition {
 // The body is shared, not copied: the Bytes it produces points at the same
 // backing array as the response, which is safe because values are immutable.
 func BodyDefinition() node.Definition {
-	return node.Static(BodyName, bodyNode)
-}
-
-var bodyNode = node.NewTypedNode(BodyName,
-	func(_ context.Context, _ *node.ExecutionContext, resp *types.Response) node.Result[*types.Bytes] {
-		return node.Ok(&types.Bytes{Value: resp.Body})
+	return node.Extractor(BodyName, func(resp *types.Response) *types.Bytes {
+		return &types.Bytes{Value: resp.Body}
 	})
+}
 
 func parseTimeout(s string) (time.Duration, error) {
 	if s == "" {
@@ -229,9 +226,8 @@ func call(ctx context.Context, client *http.Client, maxBody int64, req *types.Re
 }
 
 // build turns the request payload into an *http.Request, rejecting everything
-// that no retry could fix. The scheme is checked here rather than left to the
-// transport, which reports an unsupported one only once the call is under way.
-func build(ctx context.Context, req *types.Request) (*http.Request, *node.NodeError) {
+// that no retry could fix.
+func build(ctx context.Context, req *types.Request) (*http.Request, *node.Error) {
 	method := req.Method
 	if method == "" {
 		method = http.MethodGet
@@ -242,11 +238,15 @@ func build(ctx context.Context, req *types.Request) (*http.Request, *node.NodeEr
 		body = bytes.NewReader(req.Body)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL, body)
+	httpReq, err := http.NewRequestWithContext(ctx, method, req.URL.String(), body)
 	if err != nil {
 		return nil, node.Wrap(err, node.KindPermanent, "invalid_request",
 			"cannot build a %s request for %q", method, req.URL)
 	}
+	// types.CheckedURL has already proven the scheme, so this is not a second
+	// validation: it is the guard on the one case a value type cannot close,
+	// the zero CheckedURL, which is the empty URL and parses to no scheme at
+	// all.
 	if scheme := httpReq.URL.Scheme; scheme != "http" && scheme != "https" {
 		return nil, node.Errf(node.KindPermanent, "unsupported_scheme",
 			"scheme %q in %q is not supported, want http or https", scheme, req.URL)
@@ -260,7 +260,7 @@ func build(ctx context.Context, req *types.Request) (*http.Request, *node.NodeEr
 // transportError classifies a call that produced no response. The context is
 // consulted first because a client timeout also reports DeadlineExceeded, and
 // an abandoned execution and an overrun call mean different things to policy.
-func transportError(ctx context.Context, err error) *node.NodeError {
+func transportError(ctx context.Context, err error) *node.Error {
 	if ctx.Err() != nil {
 		return node.Normalize(ctx.Err(), "cancelled")
 	}

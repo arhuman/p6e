@@ -307,6 +307,24 @@ func (s *scheduler) loop(callerDone <-chan struct{}) (abandoned bool) {
 	}
 }
 
+// abandonedErr describes a step the run gave up on.
+//
+// A node that declared itself stoppable and was abandoned anyway broke a
+// contract it opted into, which is a bug in that node rather than the
+// documented limitation of ADR 0004. Naming the two differently is the whole
+// benefit of the declaration: the deadline applies identically either way.
+func (s *scheduler) abandonedErr(i int) *node.Error {
+	id := s.ex.Steps[i].ID
+	if node.HonoursCancellation(s.plan.Steps[i].Node) {
+		return node.Errf(node.KindInternal, "broken_cancellation",
+			"step %q declared that it honours cancellation and was still running %s "+
+				"after the execution stopped, so that promise is wrong",
+			id, s.abandonAfter)
+	}
+	return node.Errf(node.KindCancelled, "abandoned",
+		"step %q was still running %s after the execution stopped", id, s.abandonAfter)
+}
+
 // finalize settles the states the loop could not, and collects any immutability
 // violations the guard saw.
 func (s *scheduler) finalize(abandoned bool) {
@@ -314,9 +332,7 @@ func (s *scheduler) finalize(abandoned bool) {
 		for i := range s.ex.Steps {
 			if s.ex.Steps[i].State == StateRunning {
 				s.ex.Steps[i].State = StateCancelled
-				s.ex.Steps[i].Err = node.Errf(node.KindCancelled, "abandoned",
-					"step %q was still running %s after the execution stopped",
-					s.ex.Steps[i].ID, s.abandonAfter)
+				s.ex.Steps[i].Err = s.abandonedErr(i)
 				s.ex.Abandoned++
 			}
 		}

@@ -51,7 +51,7 @@ func (d *Daemon) handle(p *Pipeline) http.HandlerFunc {
 			// as a failure during it, so an unauthenticated event answers 401
 			// rather than being flattened into "bad request".
 			status, body := http.StatusBadRequest, err.Error()
-			var nerr *node.NodeError
+			var nerr *node.Error
 			if errors.As(err, &nerr) {
 				status = statusFor(nerr)
 				// The caller is told only that it was refused. The reason,
@@ -87,7 +87,7 @@ func (d *Daemon) handle(p *Pipeline) http.HandlerFunc {
 // for one rather than failing, so a burst is absorbed instead of rejected; if
 // the wait outlasts the pipeline's timeout it surfaces here as a timeout, which
 // is what actually happened.
-func statusFor(err *node.NodeError) int {
+func statusFor(err *node.Error) int {
 	switch {
 	case err == nil:
 		return http.StatusOK

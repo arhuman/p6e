@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -60,6 +61,26 @@ func Static(name string, n RuntimeNode) Definition {
 			return n, nil
 		},
 	}
+}
+
+// Extractor builds a Definition for a node that reads one field of its input
+// onto an edge and takes no configuration.
+//
+// A node has one output, so a node producing several values bundles them into
+// one type, and an extractor is what puts an individual field back on an edge.
+// Without them the bundled values are unreachable and the producing node is a
+// dead end, which is why there is one per field rather than an engine that
+// reaches into a struct: the graph describes the whole computation.
+//
+// It is here rather than repeated per package because the decision it encodes,
+// that a stray with block is rejected rather than ignored, is worth having in
+// one place. read must not retain or mutate its argument: values on edges are
+// immutable and shared with every other consumer.
+func Extractor[I, O any](name string, read func(I) O) Definition {
+	return Static(name, NewTypedNode(name,
+		func(_ context.Context, _ *ExecutionContext, in I) Result[O] {
+			return Ok(read(in))
+		}))
 }
 
 // Registry resolves the capability names a pipeline references. Workflows name

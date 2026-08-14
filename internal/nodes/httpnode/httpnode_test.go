@@ -54,6 +54,18 @@ func request(t *testing.T, ctx context.Context, with string, req *types.Request)
 // that a test reaching inside the deployment says so.
 const allowPrivate = "allow_private: true\n"
 
+// checked builds the CheckedURL a Request now requires. A test that wants an
+// unusable URL cannot go through here, which is the point of the type: those
+// cases are rejected at construction and tested as such.
+func checked(t *testing.T, raw string) types.CheckedURL {
+	t.Helper()
+	u, err := types.NewCheckedURL("test", raw)
+	if err != nil {
+		t.Fatalf("NewCheckedURL(%q): %v", raw, err)
+	}
+	return u
+}
+
 func succeeds(t *testing.T, r node.ResultValue) *types.Response {
 	t.Helper()
 	if r.Failed() {
@@ -66,7 +78,7 @@ func succeeds(t *testing.T, r node.ResultValue) *types.Response {
 	return resp
 }
 
-func fails(t *testing.T, r node.ResultValue) *node.NodeError {
+func fails(t *testing.T, r node.ResultValue) *node.Error {
 	t.Helper()
 	if !r.Failed() {
 		t.Fatalf("expected a failure, got %+v", r.Value.Interface())
@@ -104,7 +116,7 @@ func TestReturnsStatusHeadersAndBody(t *testing.T) {
 		io.WriteString(w, "hello")
 	})
 
-	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: checked(t, srv.URL)}))
 
 	if resp.Status != http.StatusCreated {
 		t.Errorf("Status = %d, want %d", resp.Status, http.StatusCreated)
@@ -125,7 +137,7 @@ func TestNon2xxStatusIsDataNotAnError(t *testing.T) {
 		io.WriteString(w, "no such thing")
 	})
 
-	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: checked(t, srv.URL)}))
 
 	if resp.Status != http.StatusNotFound {
 		t.Errorf("Status = %d, want 404", resp.Status)
@@ -144,7 +156,7 @@ func TestSendsMethodHeadersAndBody(t *testing.T) {
 
 	succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{
 		Method:  http.MethodPost,
-		URL:     srv.URL,
+		URL:     checked(t, srv.URL),
 		Headers: map[string]string{"X-Token": "secret"},
 		Body:    []byte(`{"a":1}`),
 	}))
@@ -167,7 +179,7 @@ func TestConnectionRefusedIsTransient(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	err := fails(t, request(t, t.Context(), allowPrivate, &types.Request{URL: url}))
+	err := fails(t, request(t, t.Context(), allowPrivate, &types.Request{URL: checked(t, url)}))
 
 	if err.Kind != node.KindTransient {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindTransient)
@@ -180,7 +192,7 @@ func TestConnectionRefusedIsTransient(t *testing.T) {
 func TestTimeoutIsTransient(t *testing.T) {
 	srv := hang(t)
 
-	err := fails(t, request(t, t.Context(), allowPrivate+"timeout: 50ms\n", &types.Request{URL: srv.URL}))
+	err := fails(t, request(t, t.Context(), allowPrivate+"timeout: 50ms\n", &types.Request{URL: checked(t, srv.URL)}))
 
 	if err.Kind != node.KindTransient {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindTransient)
@@ -200,7 +212,7 @@ func TestCancelledContextIsCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	err := fails(t, request(t, ctx, allowPrivate+"timeout: 30s\n", &types.Request{URL: srv.URL}))
+	err := fails(t, request(t, ctx, allowPrivate+"timeout: 30s\n", &types.Request{URL: checked(t, srv.URL)}))
 
 	if err.Kind != node.KindCancelled {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindCancelled)
@@ -217,7 +229,7 @@ func TestBodyOverTheLimitFailsRatherThanTruncates(t *testing.T) {
 		w.Write(make([]byte, 2048))
 	})
 
-	err := fails(t, request(t, t.Context(), allowPrivate+"max_body_bytes: 1024\n", &types.Request{URL: srv.URL}))
+	err := fails(t, request(t, t.Context(), allowPrivate+"max_body_bytes: 1024\n", &types.Request{URL: checked(t, srv.URL)}))
 
 	if err.Kind != node.KindPermanent {
 		t.Errorf("Kind = %q, want %q", err.Kind, node.KindPermanent)
@@ -234,7 +246,7 @@ func TestBodyExactlyAtTheLimitIsKept(t *testing.T) {
 		w.Write(make([]byte, 1024))
 	})
 
-	resp := succeeds(t, request(t, t.Context(), allowPrivate+"max_body_bytes: 1024\n", &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate+"max_body_bytes: 1024\n", &types.Request{URL: checked(t, srv.URL)}))
 
 	if len(resp.Body) != 1024 {
 		t.Errorf("read %d bytes, want the whole 1024 byte body", len(resp.Body))
@@ -269,25 +281,31 @@ func TestAppliesDefaultsWhenUnconfigured(t *testing.T) {
 		w.Write(make([]byte, 64<<10))
 	})
 
-	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: srv.URL}))
+	resp := succeeds(t, request(t, t.Context(), allowPrivate, &types.Request{URL: checked(t, srv.URL)}))
 
 	if len(resp.Body) != 64<<10 {
 		t.Errorf("read %d bytes, want the whole body under the default limit", len(resp.Body))
 	}
 }
 
-// No retry fixes a URL the graph cannot express or a method the protocol does
-// not have, so these must not be reported as transient.
+// No retry fixes a method the protocol does not have, so it must not be
+// reported as transient.
+//
+// The three URL cases that used to live here are gone on purpose: a malformed
+// URL, an unsupported scheme and a missing scheme can no longer reach this node
+// at all, because types.CheckedURL refuses them when the Request is built. They
+// are asserted at that boundary now, in TestCheckedURLRejectsUnusableURLs.
 func TestUnusableRequestsArePermanent(t *testing.T) {
 	cases := []struct {
 		name string
 		req  *types.Request
 		code string
 	}{
-		{"malformed URL", &types.Request{URL: "http://%zz"}, "invalid_request"},
-		{"invalid method token", &types.Request{Method: "GE T", URL: "http://example.invalid"}, "invalid_request"},
-		{"unsupported scheme", &types.Request{URL: "ftp://example.invalid/f"}, "unsupported_scheme"},
-		{"no scheme at all", &types.Request{URL: "example.invalid/f"}, "unsupported_scheme"},
+		{"invalid method token", &types.Request{Method: "GE T", URL: checked(t, "http://example.invalid")}, "invalid_request"},
+		// The zero CheckedURL is the one unusable URL a value type cannot make
+		// unrepresentable, since an empty composite literal is always legal. The
+		// guard against it is therefore still worth asserting.
+		{"zero CheckedURL", &types.Request{}, "unsupported_scheme"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

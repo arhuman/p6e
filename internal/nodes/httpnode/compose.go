@@ -53,10 +53,11 @@ func FromURLDefinition() node.Definition {
 
 			return node.NewTypedNode(FromURLName,
 				func(_ context.Context, _ *node.ExecutionContext, url *types.Text) node.Result[*types.Request] {
-					if err := validateURL(FromURLName, url.Value); err != nil {
+					checked, err := types.NewCheckedURL(FromURLName, url.Value)
+					if err != nil {
 						return node.Fail[*types.Request](err)
 					}
-					return node.Ok(&types.Request{Method: method, URL: url.Value})
+					return node.Ok(&types.Request{Method: method, URL: checked})
 				}), nil
 		},
 	}

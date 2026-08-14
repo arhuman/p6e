@@ -79,7 +79,7 @@ func succeeds(t *testing.T, r node.ResultValue) *types.CommandResult {
 	return res
 }
 
-func fails(t *testing.T, r node.ResultValue) *node.NodeError {
+func fails(t *testing.T, r node.ResultValue) *node.Error {
 	t.Helper()
 	if !r.Failed() {
 		t.Fatalf("expected a failure, got %+v", r.Value.Interface())

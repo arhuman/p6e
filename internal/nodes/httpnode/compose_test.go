@@ -28,7 +28,7 @@ func TestFromURLBuildsARequestFromAnEdge(t *testing.T) {
 		t.Fatalf("http.from_url: %v", r.Err)
 	}
 	req := r.Value.Interface().(*types.Request)
-	if req.URL != "https://example.com/api" {
+	if req.URL.String() != "https://example.com/api" {
 		t.Errorf("URL = %q, want the one that arrived", req.URL)
 	}
 	if req.Method != "POST" {
@@ -60,7 +60,7 @@ func TestFromURLRejectsABadURLAtExecution(t *testing.T) {
 }
 
 func TestWithHeaderSetsAndReplaces(t *testing.T) {
-	base := &types.Request{URL: "https://example.com", Headers: map[string]string{"Accept": "text/plain"}}
+	base := &types.Request{URL: checked(t, "https://example.com"), Headers: map[string]string{"Accept": "text/plain"}}
 
 	r := compose(t, WithHeaderDefinition(), yamlConfig("name: Authorization\n"),
 		node.NewValue(base), text("Bearer t"))
@@ -98,7 +98,7 @@ func TestWithHeaderCanonicalisesNames(t *testing.T) {
 // a sibling step, and a retry hands the same input to the next attempt.
 func TestComposeDoesNotMutateItsInput(t *testing.T) {
 	base := &types.Request{
-		URL:     "https://example.com",
+		URL:     checked(t, "https://example.com"),
 		Headers: map[string]string{"Accept": "text/plain"},
 		Body:    []byte("original"),
 	}
@@ -120,7 +120,7 @@ func TestComposeDoesNotMutateItsInput(t *testing.T) {
 }
 
 func TestWithBodySetsTheBody(t *testing.T) {
-	base := &types.Request{URL: "https://example.com", Method: "POST"}
+	base := &types.Request{URL: checked(t, "https://example.com"), Method: "POST"}
 
 	r := compose(t, WithBodyDefinition(), node.EmptyConfig,
 		node.NewValue(base), node.NewValue(&types.Bytes{Value: []byte(`{"a":1}`)}))

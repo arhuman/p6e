@@ -159,7 +159,7 @@ type Fire func(ctx context.Context, values map[string]node.Value) Outcome
 // trigger layer growing a dependency on the runtime.
 type Outcome struct {
 	// Err is the failure that ended the run, or nil.
-	Err *node.NodeError
+	Err *node.Error
 	// Value is the output of the step the pipeline named in respond_with. It is
 	// zero when the pipeline named none, or when the run failed before
 	// producing it.

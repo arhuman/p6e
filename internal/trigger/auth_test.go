@@ -90,9 +90,9 @@ func TestWebhookRejectsBadSignatures(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected the event to be rejected")
 			}
-			nerr, ok := err.(*node.NodeError)
+			nerr, ok := err.(*node.Error)
 			if !ok {
-				t.Fatalf("error is %T, want *node.NodeError", err)
+				t.Fatalf("error is %T, want *node.Error", err)
 			}
 			if nerr.Code != CodeUnauthorized {
 				t.Errorf("Code = %q, want %q", nerr.Code, CodeUnauthorized)
@@ -115,9 +115,9 @@ func TestWebhookUnsetSecretIsInternalNotUnauthorized(t *testing.T) {
 
 	body := "{}"
 	_, err := w.Values(post(body, "X-Hub-Signature-256", signed(testSecret, body)))
-	nerr, ok := err.(*node.NodeError)
+	nerr, ok := err.(*node.Error)
 	if !ok {
-		t.Fatalf("error is %T, want *node.NodeError", err)
+		t.Fatalf("error is %T, want *node.Error", err)
 	}
 	if nerr.Code != "secret_unset" {
 		t.Errorf("Code = %q, want %q", nerr.Code, "secret_unset")
@@ -154,9 +154,9 @@ func TestWebhookSizeCapAppliesBeforeAuth(t *testing.T) {
 
 	body := strings.Repeat("x", 64)
 	_, err := w.Values(post(body, "X-Hub-Signature-256", signed(testSecret, body)))
-	nerr, ok := err.(*node.NodeError)
+	nerr, ok := err.(*node.Error)
 	if !ok {
-		t.Fatalf("error is %T, want *node.NodeError", err)
+		t.Fatalf("error is %T, want *node.Error", err)
 	}
 	if nerr.Code != "body_too_large" {
 		t.Errorf("Code = %q, want %q", nerr.Code, "body_too_large")

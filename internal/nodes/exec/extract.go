@@ -1,8 +1,6 @@
 package exec
 
 import (
-	"context"
-
 	"github.com/arhuman/p6e/internal/node"
 	"github.com/arhuman/p6e/internal/nodes/types"
 )
@@ -25,7 +23,7 @@ const (
 // The bytes are shared, not copied: the Bytes this produces points at the same
 // backing array as the result, which is safe because values are immutable.
 func StdoutDefinition() node.Definition {
-	return extractor(StdoutName, func(r *types.CommandResult) *types.Bytes {
+	return node.Extractor(StdoutName, func(r *types.CommandResult) *types.Bytes {
 		return &types.Bytes{Value: r.Stdout}
 	})
 }
@@ -33,7 +31,7 @@ func StdoutDefinition() node.Definition {
 // StderrDefinition registers exec.stderr: *types.CommandResult in,
 // *types.Bytes out. See StdoutDefinition.
 func StderrDefinition() node.Definition {
-	return extractor(StderrName, func(r *types.CommandResult) *types.Bytes {
+	return node.Extractor(StderrName, func(r *types.CommandResult) *types.Bytes {
 		return &types.Bytes{Value: r.Stderr}
 	})
 }
@@ -44,17 +42,7 @@ func StderrDefinition() node.Definition {
 // A non-zero exit code is data, not a failure, and this is what makes that
 // claim usable: a workflow reads the code and decides for itself what it means.
 func ExitCodeDefinition() node.Definition {
-	return extractor(ExitCodeName, func(r *types.CommandResult) *types.Int {
+	return node.Extractor(ExitCodeName, func(r *types.CommandResult) *types.Int {
 		return &types.Int{Value: int64(r.ExitCode)}
 	})
-}
-
-// extractor builds a field reader. None of them takes configuration, and a with
-// block is rejected rather than ignored, so a misplaced key fails at check time
-// instead of quietly doing nothing.
-func extractor[O any](name string, read func(*types.CommandResult) O) node.Definition {
-	return node.Static(name, node.NewTypedNode(name,
-		func(_ context.Context, _ *node.ExecutionContext, result *types.CommandResult) node.Result[O] {
-			return node.Ok(read(result))
-		}))
 }

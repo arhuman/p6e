@@ -79,7 +79,7 @@ type verifier struct {
 // whether the header was missing, malformed, or merely wrong tells an attacker
 // which half of the problem to work on, and the daemon's log records the
 // specific reason for the operator who is entitled to it.
-func (v *verifier) verify(r *http.Request, body []byte) (reason string, err *node.NodeError) {
+func (v *verifier) verify(r *http.Request, body []byte) (reason string, err *node.Error) {
 	secret := os.Getenv(v.secretEnv)
 	if secret == "" {
 		// A misconfigured daemon is not an unauthorized caller, and saying so
@@ -110,6 +110,6 @@ func (v *verifier) verify(r *http.Request, body []byte) (reason string, err *nod
 	return "", nil
 }
 
-func unauthorized() *node.NodeError {
+func unauthorized() *node.Error {
 	return node.Errf(node.KindPermanent, CodeUnauthorized, "unauthorized")
 }

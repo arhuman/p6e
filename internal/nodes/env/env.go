@@ -83,7 +83,7 @@ func newNode(cfg node.Config) (node.RuntimeNode, error) {
 // here, at compile time, by the same function the variable's value goes
 // through, so a default that cannot parse fails p6e check rather than the first
 // run that needs it.
-func source[P any](c config, parse func(string) (P, *node.NodeError)) (node.RuntimeNode, error) {
+func source[P any](c config, parse func(string) (P, *node.Error)) (node.RuntimeNode, error) {
 	var fallback P
 	if c.Default != nil {
 		v, err := parse(*c.Default)
@@ -112,13 +112,13 @@ func source[P any](c config, parse func(string) (P, *node.NodeError)) (node.Runt
 	}), nil
 }
 
-func parseText(s string) (*types.Text, *node.NodeError) { return &types.Text{Value: s}, nil }
+func parseText(s string) (*types.Text, *node.Error) { return &types.Text{Value: s}, nil }
 
-func parseBytes(s string) (*types.Bytes, *node.NodeError) {
+func parseBytes(s string) (*types.Bytes, *node.Error) {
 	return &types.Bytes{Value: []byte(s)}, nil
 }
 
-func parseBool(s string) (*types.Bool, *node.NodeError) {
+func parseBool(s string) (*types.Bool, *node.Error) {
 	b, err := strconv.ParseBool(s)
 	if err != nil {
 		return nil, node.Wrap(err, node.KindPermanent, "bad_value",
@@ -127,7 +127,7 @@ func parseBool(s string) (*types.Bool, *node.NodeError) {
 	return &types.Bool{Value: b}, nil
 }
 
-func parseInt(s string) (*types.Int, *node.NodeError) {
+func parseInt(s string) (*types.Int, *node.Error) {
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return nil, node.Wrap(err, node.KindPermanent, "bad_value",

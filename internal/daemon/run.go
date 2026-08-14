@@ -107,7 +107,7 @@ func (d *Daemon) fire(p *Pipeline) trigger.Fire {
 // draining check, and a refusal after that point would leak the registration.
 //
 // The caller owns the matching release, which is why this does not take it.
-func (d *Daemon) admit(p *Pipeline) *node.NodeError {
+func (d *Daemon) admit(p *Pipeline) *node.Error {
 	if p.quarantined.Load() {
 		return node.Errf(node.KindPermanent, codeQuarantined,
 			"pipeline %q is quarantined after %d consecutive runs left a step running",

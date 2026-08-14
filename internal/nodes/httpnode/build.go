@@ -2,7 +2,6 @@ package httpnode
 
 import (
 	"context"
-	"net/url"
 	"strings"
 
 	"github.com/arhuman/p6e/internal/node"
@@ -43,7 +42,8 @@ func BuildDefinition() node.Definition {
 				return nil, node.Wrap(err, node.KindInvalidInput, "bad_config",
 					"invalid %s configuration", BuildName)
 			}
-			if err := validateURL(BuildName, c.URL); err != nil {
+			checked, err := types.NewCheckedURL(BuildName, c.URL)
+			if err != nil {
 				return nil, err
 			}
 
@@ -54,7 +54,7 @@ func BuildDefinition() node.Definition {
 
 			request := &types.Request{
 				Method:  method,
-				URL:     c.URL,
+				URL:     checked,
 				Headers: c.Headers,
 				Body:    []byte(c.Body),
 			}
@@ -64,26 +64,4 @@ func BuildDefinition() node.Definition {
 				}), nil
 		},
 	}
-}
-
-// validateURL is shared by http.build, which checks its configured URL at
-// compile time, and http.from_url, which checks an arriving one at execution.
-// capability names the node in the error, since the two report the same problem
-// at different moments.
-func validateURL(capability, raw string) *node.NodeError {
-	if raw == "" {
-		return node.Errf(node.KindInvalidInput, "missing_url", "%s requires a url", capability)
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return node.Wrap(err, node.KindInvalidInput, "bad_url", "invalid url %q", raw)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return node.Errf(node.KindInvalidInput, "bad_url",
-			"url %q must use the http or https scheme", raw)
-	}
-	if parsed.Host == "" {
-		return node.Errf(node.KindInvalidInput, "bad_url", "url %q has no host", raw)
-	}
-	return nil
 }

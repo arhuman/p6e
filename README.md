@@ -148,7 +148,7 @@ func run(_ context.Context, _ *node.ExecutionContext, in *types.Text) node.Resul
 `node.NewTypedNode[I, O any](name string, fn func(context.Context, *node.ExecutionContext, I) node.Result[O]) node.RuntimeNode`
 is the authoring entry point; it is also the only place type erasure happens
 (ADR 0001). `node.Result[T]` carries exactly one of `Value` or `Err`: build it
-with `node.Ok(v)` or `node.Fail(err)`. A failure is a `*node.NodeError`, never
+with `node.Ok(v)` or `node.Fail(err)`. A failure is a `*node.Error`, never
 a panic; it carries a `Kind` (`transient`, `permanent`, `invalid_input`,
 `cancelled`, `internal`) and a `Retryable` flag, built with `node.Errf` or
 `node.Wrap`.
@@ -163,6 +163,11 @@ nothing. A type that crosses
 an edge needs a stable name for pipeline files and error messages, given by
 `node.RegisterType[T](name string) node.TypeID` from an `init` function, for
 example `node.RegisterType[*types.Text]("Text")`.
+
+A node whose work genuinely stops when its context ends can say so with
+`node.AsStoppable(n)`, which `exec` does because it kills the process it
+started. It buys a better report rather than a longer deadline: an abandoned
+step that made the promise is reported as having broken it (ADR 0016).
 
 Two rules an author must not break:
 
@@ -421,6 +426,11 @@ on.
   trigger concern rather than a node or a job for the proxy.
 - `docs/adr/0014-outbound-destination-policy.md`: why a request built from data
   cannot reach inside the deployment, and why the check lives in the dialer.
+- `docs/adr/0015-checked-url-as-a-type.md`: why a validated URL is a type, and
+  why an authenticated event is deliberately not one.
+- `docs/adr/0016-stoppable-nodes.md`: why a node may declare that it honours
+  cancellation, and why that declaration is not allowed to make `--inline` safe
+  by default.
 - `docs/adr/0003-v0-baseline-performance.md`: the measurements behind the
   Performance section above.
 

@@ -51,7 +51,7 @@ type StepResult struct {
 	// Value is the step's output, set only when State is StateSucceeded. It is
 	// the same reference every dependent receives: nothing here is copied.
 	Value node.Value
-	Err   *node.NodeError
+	Err   *node.Error
 	Meta  node.ResultMeta
 }
 
@@ -87,7 +87,7 @@ type Execution struct {
 func (e *Execution) Failed() bool { return e.FailedStep >= 0 || e.Cancelled }
 
 // Err returns the failure that ended the execution, or nil.
-func (e *Execution) Err() *node.NodeError {
+func (e *Execution) Err() *node.Error {
 	switch {
 	case e.FailedStep >= 0:
 		return e.Steps[e.FailedStep].Err
