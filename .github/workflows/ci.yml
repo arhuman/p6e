@@ -136,11 +136,11 @@ jobs:
       # SAST over the source. The engine runs local processes and makes outbound
       # HTTP on a pipeline's instruction, so the interesting findings are in how
       # it handles what a webhook body carries.
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: go
-      - uses: github/codeql-action/autobuild@v3
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/analyze@v4
         with:
           category: /language:go
 
@@ -159,7 +159,7 @@ jobs:
           # Report everything; fail the job only on what is actually fixable.
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0"
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy.sarif
